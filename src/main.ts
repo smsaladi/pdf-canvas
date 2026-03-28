@@ -6,6 +6,7 @@ import { InteractionLayer } from "./interaction";
 import { PropertiesPanel } from "./properties";
 import { UndoManager } from "./undo";
 import { Toolbar } from "./toolbar";
+import { TextLayer } from "./text-layer";
 
 let rpc: WorkerRPC;
 let viewport: Viewport;
@@ -13,6 +14,7 @@ let interaction: InteractionLayer;
 let properties: PropertiesPanel;
 let undoManager: UndoManager;
 let toolbar: Toolbar;
+let textLayer: TextLayer;
 let currentFilename = "document.pdf";
 let hasOpenDocument = false;
 let isDirty = false;
@@ -29,9 +31,13 @@ function init() {
   // Undo manager
   undoManager = new UndoManager(50);
 
+  // Text layer (for text editing)
+  textLayer = new TextLayer(viewport);
+
   // Interaction layer
   interaction = new InteractionLayer(viewport);
   interaction.undoManager = undoManager;
+  interaction.textLayer = textLayer;
 
   // Properties panel
   const propsEl = document.getElementById("properties-panel")!;
@@ -64,6 +70,25 @@ function init() {
     toolbar.setTool("select");
     interaction.setTool("select");
   };
+
+  // Wire text edit commits
+  textLayer.onCommit(async (page, oldText, newText) => {
+    markDirty();
+
+    // Try content stream replacement first
+    const response = await rpc.send({
+      type: "replaceTextInStream",
+      page,
+      oldText,
+      newText,
+    });
+
+    if (response.type === "textReplaced" && response.count > 0) {
+      // Success — clear text cache and re-render
+      viewport.clearTextCache(page);
+      await viewport.rerenderPage(page);
+    }
+  });
 
   // Color picker
   const colorInput = document.getElementById("toolbar-color") as HTMLInputElement;
@@ -321,7 +346,9 @@ async function handleKeyDown(e: KeyboardEvent): Promise<void> {
 
 function isEditingText(): boolean {
   const active = document.activeElement;
-  return active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement;
+  return active instanceof HTMLTextAreaElement
+    || active instanceof HTMLInputElement
+    || (active instanceof HTMLElement && active.contentEditable === "true");
 }
 
 async function saveFile(): Promise<void> {

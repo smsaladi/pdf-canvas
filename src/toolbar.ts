@@ -1,6 +1,6 @@
 // Toolbar state and mode management
 
-export type ToolMode = "select" | "note" | "freetext" | "highlight" | "rectangle" | "circle" | "line" | "ink";
+export type ToolMode = "select" | "textedit" | "note" | "freetext" | "highlight" | "rectangle" | "circle" | "line" | "ink";
 
 export type ToolChangeListener = (tool: ToolMode) => void;
 

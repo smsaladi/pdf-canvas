@@ -5,6 +5,7 @@ import type { AnnotationDTO, WidgetDTO } from "./types";
 import type { ToolMode } from "./toolbar";
 import { pdfRectToScreenRect, screenToPdf } from "./coords";
 import type { UndoManager } from "./undo";
+import type { TextLayer } from "./text-layer";
 
 const HANDLE_SIZE = 8;
 const NOTE_ICON_SIZE = 24;
@@ -60,6 +61,7 @@ export class InteractionLayer {
   private currentTool: ToolMode = "select";
   private currentColor: [number, number, number] = [1, 0, 0]; // default red
   undoManager: UndoManager | null = null;
+  textLayer: TextLayer | null = null;
   onCreationDone: (() => void) | null = null;
 
   setColor(color: [number, number, number]): void {
@@ -96,10 +98,13 @@ export class InteractionLayer {
   }
 
   setTool(tool: ToolMode): void {
+    // Clear text selection when leaving textedit mode
+    if (this.currentTool === "textedit" && tool !== "textedit" && this.textLayer) {
+      this.textLayer.clearSelection();
+    }
     this.currentTool = tool;
-    // Update cursor on all overlay containers
     for (const [, container] of this.overlayContainers) {
-      container.style.cursor = tool === "select" ? "" : "crosshair";
+      container.style.cursor = tool === "textedit" ? "text" : tool === "select" ? "" : "crosshair";
     }
   }
 
@@ -212,6 +217,22 @@ export class InteractionLayer {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    // Handle text edit drag selection
+    if (this.currentTool === "textedit" && this.textLayer) {
+      // Find which page container the mouse is over
+      for (const [pageIndex, container] of this.overlayContainers) {
+        const rect = container.getBoundingClientRect();
+        if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+          const screenX = e.clientX - rect.left;
+          const screenY = e.clientY - rect.top;
+          const scale = this.viewport.getScale();
+          this.textLayer.handlePointerMove(pageIndex, screenX / scale, screenY / scale);
+          break;
+        }
+      }
+      return;
+    }
+
     // Handle creation drag
     if (this.creationState) {
       const container = this.overlayContainers.get(this.creationState.pageIndex);
@@ -259,6 +280,11 @@ export class InteractionLayer {
   }
 
   private async onPointerUp(e: PointerEvent): Promise<void> {
+    if (this.currentTool === "textedit" && this.textLayer) {
+      this.textLayer.handlePointerUp();
+      return;
+    }
+
     if (this.creationState) {
       await this.finishCreation();
       return;
@@ -547,9 +573,19 @@ export class InteractionLayer {
       container.className = "annotation-overlay-container";
       container.dataset.page = String(pageIndex);
 
-      container.addEventListener("pointerdown", (e) => {
-        if (e.target === container) {
-          if (this.currentTool !== "select") {
+      const containerEl = container;
+      containerEl.addEventListener("pointerdown", (e) => {
+        if (e.target === containerEl || (e.target as HTMLElement).classList.contains("text-highlight-container")) {
+          if (this.currentTool === "textedit" && this.textLayer) {
+            const rect = containerEl.getBoundingClientRect();
+            const screenX = e.clientX - rect.left;
+            const screenY = e.clientY - rect.top;
+            const scale = this.viewport.getScale();
+            const pdfX = screenX / scale;
+            const pdfY = screenY / scale;
+            this.textLayer.handlePointerDown(pageIndex, pdfX, pdfY, e);
+            e.preventDefault();
+          } else if (this.currentTool !== "select" && this.currentTool !== "textedit") {
             this.startCreation(pageIndex, e);
           } else {
             this.select(null);

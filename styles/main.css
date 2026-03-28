@@ -485,6 +485,35 @@ body {
   background: rgba(100, 149, 237, 0.15);
 }
 
+/* Text editing */
+
+.text-highlight-container {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.text-selection-highlight {
+  position: absolute;
+  background: rgba(74, 158, 255, 0.3);
+  pointer-events: none;
+  border-radius: 1px;
+}
+
+.text-edit-overlay {
+  position: absolute;
+  z-index: 15;
+  background: rgba(255, 255, 255, 0.95);
+  border: 2px solid var(--accent);
+  outline: none;
+  padding: 0 2px;
+  margin: 0;
+  box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.2);
+  white-space: pre;
+  overflow: visible;
+}
+
 /* Creation preview */
 .creation-preview {
   position: absolute;
