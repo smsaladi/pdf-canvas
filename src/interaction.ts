@@ -1,0 +1,819 @@
+// Interaction layer: annotation overlays, selection, drag, resize
+
+import type { Viewport } from "./viewport";
+import type { AnnotationDTO, WidgetDTO } from "./types";
+import type { ToolMode } from "./toolbar";
+import { pdfRectToScreenRect, screenToPdf } from "./coords";
+import type { UndoManager } from "./undo";
+
+const HANDLE_SIZE = 8;
+const NOTE_ICON_SIZE = 24;
+
+const ICON_TYPES = new Set(["Text"]);
+const QUADPOINT_TYPES = new Set(["Highlight", "Underline", "StrikeOut", "Squiggly"]);
+
+// Map tool mode → MuPDF annotation type
+const TOOL_TO_ANNOT_TYPE: Record<string, string> = {
+  note: "Text",
+  freetext: "FreeText",
+  highlight: "Highlight",
+  rectangle: "Square",
+  circle: "Circle",
+  line: "Line",
+  ink: "Ink",
+};
+
+export type SelectionListener = (annotation: AnnotationDTO | null) => void;
+export type MutationListener = (annotId: string, property: string, oldValue: any, newValue: any) => void;
+
+interface DragState {
+  annotId: string;
+  startScreenX: number;
+  startScreenY: number;
+  originalLeft: number;
+  originalTop: number;
+  handle: string | null;
+  originalWidth: number;
+  originalHeight: number;
+  originalAnnotRect: [number, number, number, number];
+  originalQuadPoints?: number[][];
+}
+
+interface CreationState {
+  tool: ToolMode;
+  pageIndex: number;
+  startScreenX: number;
+  startScreenY: number;
+  previewEl: HTMLDivElement;
+  inkPoints?: Array<[number, number]>;
+}
+
+export class InteractionLayer {
+  private viewport: Viewport;
+  private overlayContainers = new Map<number, HTMLDivElement>();
+  private overlayElements = new Map<string, HTMLDivElement>();
+  private selectedId: string | null = null;
+  private selectionListeners: SelectionListener[] = [];
+  private mutationListeners: MutationListener[] = [];
+  private dragState: DragState | null = null;
+  private creationState: CreationState | null = null;
+  private currentTool: ToolMode = "select";
+  private currentColor: [number, number, number] = [1, 0, 0]; // default red
+  undoManager: UndoManager | null = null;
+  onCreationDone: (() => void) | null = null;
+
+  setColor(color: [number, number, number]): void {
+    this.currentColor = color;
+  }
+
+  getColor(): [number, number, number] {
+    return this.currentColor;
+  }
+
+  constructor(viewport: Viewport) {
+    this.viewport = viewport;
+
+    viewport.on((event) => {
+      switch (event.type) {
+        case "annotationsLoaded":
+          this.renderOverlaysForPage(event.page, event.annotations);
+          break;
+        case "widgetsLoaded":
+          this.renderWidgetOverlaysForPage(event.page, event.widgets);
+          break;
+        case "pageLayoutChanged":
+          this.rebuildAllOverlayContainers();
+          break;
+        case "zoomChanged":
+          this.updateAllOverlayPositions();
+          break;
+      }
+    });
+
+    // Global pointer move/up for drag and creation operations
+    document.addEventListener("pointermove", (e) => this.onPointerMove(e));
+    document.addEventListener("pointerup", (e) => this.onPointerUp(e));
+  }
+
+  setTool(tool: ToolMode): void {
+    this.currentTool = tool;
+    // Update cursor on all overlay containers
+    for (const [, container] of this.overlayContainers) {
+      container.style.cursor = tool === "select" ? "" : "crosshair";
+    }
+  }
+
+  onSelectionChange(listener: SelectionListener): () => void {
+    this.selectionListeners.push(listener);
+    return () => { this.selectionListeners = this.selectionListeners.filter((l) => l !== listener); };
+  }
+
+  onMutation(listener: MutationListener): () => void {
+    this.mutationListeners.push(listener);
+    return () => { this.mutationListeners = this.mutationListeners.filter((l) => l !== listener); };
+  }
+
+  private emitMutation(annotId: string, property: string, oldValue: any, newValue: any) {
+    for (const listener of this.mutationListeners) {
+      listener(annotId, property, oldValue, newValue);
+    }
+  }
+
+  getSelectedAnnotation(): AnnotationDTO | null {
+    if (!this.selectedId) return null;
+    return this.getAnnotationForId(this.selectedId);
+  }
+
+  getSelectedId(): string | null {
+    return this.selectedId;
+  }
+
+  select(annotId: string | null): void {
+    if (this.selectedId === annotId) return;
+
+    if (this.selectedId) {
+      const prev = this.overlayElements.get(this.selectedId);
+      if (prev) {
+        prev.classList.remove("selected");
+        this.removeHandles(prev);
+      }
+    }
+
+    this.selectedId = annotId;
+
+    if (annotId) {
+      const el = this.overlayElements.get(annotId);
+      if (el) {
+        el.classList.add("selected");
+        this.addHandles(el);
+      }
+    }
+
+    const annotation = this.getSelectedAnnotation();
+    for (const listener of this.selectionListeners) {
+      listener(annotation);
+    }
+  }
+
+  async deleteSelected(): Promise<void> {
+    const annot = this.getSelectedAnnotation();
+    if (!annot) return;
+
+    const rpc = this.viewport.getRpc();
+    const annotId = annot.id;
+
+    // Push undo
+    if (this.undoManager) {
+      this.undoManager.push({
+        annotId,
+        property: "delete",
+        previousValue: annot,
+        newValue: null,
+      });
+    }
+
+    this.select(null);
+    await rpc.send({ type: "deleteAnnot", annotId });
+    await this.viewport.rerenderPage(annot.page);
+  }
+
+  async moveAnnot(annotId: string, newRect: [number, number, number, number]): Promise<void> {
+    const rpc = this.viewport.getRpc();
+    await rpc.send({ type: "setAnnotRect", annotId, rect: newRect });
+  }
+
+  async moveQuadPoints(annotId: string, newQuadPoints: number[][]): Promise<void> {
+    const rpc = this.viewport.getRpc();
+    await rpc.send({ type: "setAnnotQuadPoints", annotId, quadPoints: newQuadPoints });
+  }
+
+  // --- Drag and resize ---
+
+  private startDrag(annotId: string, e: PointerEvent, handle: string | null): void {
+    const el = this.overlayElements.get(annotId);
+    const annot = this.getAnnotationForId(annotId);
+    if (!el || !annot) return;
+
+    this.dragState = {
+      annotId,
+      startScreenX: e.clientX,
+      startScreenY: e.clientY,
+      originalLeft: parseFloat(el.style.left),
+      originalTop: parseFloat(el.style.top),
+      originalWidth: parseFloat(el.style.width) || el.offsetWidth,
+      originalHeight: parseFloat(el.style.height) || el.offsetHeight,
+      originalAnnotRect: [...annot.rect] as [number, number, number, number],
+      originalQuadPoints: annot.quadPoints ? annot.quadPoints.map(q => [...q]) : undefined,
+      handle,
+    };
+
+    el.style.transition = "none";
+    e.preventDefault();
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    // Handle creation drag
+    if (this.creationState) {
+      const container = this.overlayContainers.get(this.creationState.pageIndex);
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      if (this.creationState.tool === "ink" && this.creationState.inkPoints) {
+        this.creationState.inkPoints.push([x, y]);
+        // Update preview as bounding box of all points
+        const pts = this.creationState.inkPoints;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const [px, py] of pts) { minX = Math.min(minX, px); minY = Math.min(minY, py); maxX = Math.max(maxX, px); maxY = Math.max(maxY, py); }
+        this.creationState.previewEl.style.left = `${minX}px`;
+        this.creationState.previewEl.style.top = `${minY}px`;
+        this.creationState.previewEl.style.width = `${maxX - minX}px`;
+        this.creationState.previewEl.style.height = `${maxY - minY}px`;
+      } else {
+        const sx = this.creationState.startScreenX;
+        const sy = this.creationState.startScreenY;
+        this.creationState.previewEl.style.left = `${Math.min(sx, x)}px`;
+        this.creationState.previewEl.style.top = `${Math.min(sy, y)}px`;
+        this.creationState.previewEl.style.width = `${Math.abs(x - sx)}px`;
+        this.creationState.previewEl.style.height = `${Math.abs(y - sy)}px`;
+      }
+      return;
+    }
+
+    if (!this.dragState) return;
+
+    const { annotId, startScreenX, startScreenY, originalLeft, originalTop, originalWidth, originalHeight, handle } = this.dragState;
+    const el = this.overlayElements.get(annotId);
+    if (!el) return;
+
+    const dx = e.clientX - startScreenX;
+    const dy = e.clientY - startScreenY;
+
+    if (handle === null) {
+      el.style.left = `${originalLeft + dx}px`;
+      el.style.top = `${originalTop + dy}px`;
+    } else {
+      this.applyResize(el, handle, dx, dy, originalLeft, originalTop, originalWidth, originalHeight);
+    }
+  }
+
+  private async onPointerUp(e: PointerEvent): Promise<void> {
+    if (this.creationState) {
+      await this.finishCreation();
+      return;
+    }
+
+    if (!this.dragState) return;
+
+    const { annotId, startScreenX, startScreenY, handle, originalAnnotRect, originalQuadPoints } = this.dragState;
+    const dx = e.clientX - startScreenX;
+    const dy = e.clientY - startScreenY;
+    this.dragState = null;
+
+    // Skip if no movement
+    if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+
+    const scale = this.viewport.getScale();
+    const annot = this.getAnnotationForId(annotId);
+    if (!annot) return;
+
+    const pdfDx = dx / scale;
+    const pdfDy = dy / scale;
+
+    if (handle === null) {
+      // Move completed
+      if (QUADPOINT_TYPES.has(annot.type) && originalQuadPoints && originalQuadPoints.length > 0) {
+        // Shift all quad points
+        const newQuads = originalQuadPoints.map(q => {
+          const shifted = [...q];
+          for (let i = 0; i < shifted.length; i += 2) {
+            shifted[i] += pdfDx;
+            shifted[i + 1] += pdfDy;
+          }
+          return shifted;
+        });
+
+        if (this.undoManager) {
+          this.undoManager.push({ annotId, property: "quadPoints", previousValue: originalQuadPoints, newValue: newQuads });
+        }
+        await this.moveQuadPoints(annotId, newQuads);
+      } else {
+        const newRect: [number, number, number, number] = [
+          originalAnnotRect[0] + pdfDx,
+          originalAnnotRect[1] + pdfDy,
+          originalAnnotRect[2] + pdfDx,
+          originalAnnotRect[3] + pdfDy,
+        ];
+
+        if (this.undoManager) {
+          this.undoManager.push({ annotId, property: "rect", previousValue: originalAnnotRect, newValue: newRect });
+        }
+        await this.moveAnnot(annotId, newRect);
+      }
+    } else {
+      // Resize completed — compute new rect from handle direction
+      const newRect = this.computeResizedRect(handle, pdfDx, pdfDy, originalAnnotRect);
+
+      if (this.undoManager) {
+        this.undoManager.push({ annotId, property: "rect", previousValue: originalAnnotRect, newValue: newRect });
+      }
+      await this.moveAnnot(annotId, newRect);
+    }
+
+    // Re-render page and refresh overlays
+    await this.viewport.rerenderPage(annot.page);
+  }
+
+  private applyResize(
+    el: HTMLDivElement, handle: string, dx: number, dy: number,
+    origLeft: number, origTop: number, origWidth: number, origHeight: number
+  ): void {
+    let newLeft = origLeft, newTop = origTop, newWidth = origWidth, newHeight = origHeight;
+
+    if (handle.includes("w")) { newLeft = origLeft + dx; newWidth = origWidth - dx; }
+    if (handle.includes("e")) { newWidth = origWidth + dx; }
+    if (handle.includes("n")) { newTop = origTop + dy; newHeight = origHeight - dy; }
+    if (handle.includes("s")) { newHeight = origHeight + dy; }
+
+    // Enforce minimums
+    if (newWidth < 10) { newWidth = 10; if (handle.includes("w")) newLeft = origLeft + origWidth - 10; }
+    if (newHeight < 10) { newHeight = 10; if (handle.includes("n")) newTop = origTop + origHeight - 10; }
+
+    el.style.left = `${newLeft}px`;
+    el.style.top = `${newTop}px`;
+    el.style.width = `${newWidth}px`;
+    el.style.height = `${newHeight}px`;
+  }
+
+  private computeResizedRect(
+    handle: string, pdfDx: number, pdfDy: number,
+    orig: [number, number, number, number]
+  ): [number, number, number, number] {
+    let [x1, y1, x2, y2] = orig;
+
+    if (handle.includes("w")) x1 += pdfDx;
+    if (handle.includes("e")) x2 += pdfDx;
+    if (handle.includes("n")) y1 += pdfDy;
+    if (handle.includes("s")) y2 += pdfDy;
+
+    // Enforce minimum size (5pt)
+    if (x2 - x1 < 5) { if (handle.includes("w")) x1 = x2 - 5; else x2 = x1 + 5; }
+    if (y2 - y1 < 5) { if (handle.includes("n")) y1 = y2 - 5; else y2 = y1 + 5; }
+
+    return [x1, y1, x2, y2];
+  }
+
+  // --- Creation ---
+
+  private startCreation(pageIndex: number, e: PointerEvent): void {
+    const container = this.overlayContainers.get(pageIndex);
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // For "note" tool, just place immediately on pointerdown (no drag needed)
+    if (this.currentTool === "note") {
+      this.createAnnotationAtPoint(pageIndex, x, y);
+      return;
+    }
+
+    // Create a preview element for drag-to-create
+    const preview = document.createElement("div");
+    preview.className = "creation-preview";
+    preview.style.left = `${x}px`;
+    preview.style.top = `${y}px`;
+    preview.style.width = "0px";
+    preview.style.height = "0px";
+    container.appendChild(preview);
+
+    this.creationState = {
+      tool: this.currentTool,
+      pageIndex,
+      startScreenX: x,
+      startScreenY: y,
+      previewEl: preview,
+      inkPoints: this.currentTool === "ink" ? [[x, y]] : undefined,
+    };
+
+    e.preventDefault();
+  }
+
+  private async createAnnotationAtPoint(pageIndex: number, screenX: number, screenY: number): Promise<void> {
+    const scale = this.viewport.getScale();
+    const pdf = screenToPdf(screenX, screenY, { scale, pageOffsetX: 0, pageOffsetY: 0 });
+
+    // Sticky note: fixed 24x24 icon
+    const rect: [number, number, number, number] = [pdf.x, pdf.y, pdf.x + 24, pdf.y + 24];
+
+    const response = await this.viewport.getRpc().send({
+      type: "createAnnot",
+      page: pageIndex,
+      annotType: "Text",
+      rect,
+      properties: {
+        color: this.currentColor,
+        icon: "Note",
+        contents: "",
+      } as any,
+    });
+
+    if (response.type === "annotCreated" && this.undoManager) {
+      this.undoManager.push({
+        annotId: response.annot.id,
+        property: "create",
+        previousValue: null,
+        newValue: response.annot,
+      });
+    }
+
+    await this.viewport.rerenderPage(pageIndex);
+
+    if (response.type === "annotCreated") {
+      this.select(response.annot.id);
+    }
+    this.onCreationDone?.();
+  }
+
+  private async finishCreation(): Promise<void> {
+    if (!this.creationState) return;
+    const { tool, pageIndex, startScreenX, startScreenY, previewEl, inkPoints } = this.creationState;
+    const endX = parseFloat(previewEl.style.left) + parseFloat(previewEl.style.width);
+    const endY = parseFloat(previewEl.style.top) + parseFloat(previewEl.style.height);
+    previewEl.remove();
+    this.creationState = null;
+
+    const scale = this.viewport.getScale();
+    const transform = { scale, pageOffsetX: 0, pageOffsetY: 0 };
+
+    // Compute PDF rect from screen coords
+    const p1 = screenToPdf(Math.min(startScreenX, endX), Math.min(startScreenY, endY), transform);
+    const p2 = screenToPdf(Math.max(startScreenX, endX), Math.max(startScreenY, endY), transform);
+
+    // Skip if too small
+    if (Math.abs(p2.x - p1.x) < 3 && Math.abs(p2.y - p1.y) < 3 && tool !== "ink") return;
+
+    const rect: [number, number, number, number] = [p1.x, p1.y, p2.x, p2.y];
+    const annotType = TOOL_TO_ANNOT_TYPE[tool];
+    if (!annotType) return;
+
+    const properties: any = {};
+
+    // Set sensible defaults per type
+    switch (tool) {
+      case "freetext":
+        properties.color = this.currentColor;
+        properties.defaultAppearance = { font: "Helv", size: 14, color: [0, 0, 0] };
+        properties.contents = "";
+        break;
+      case "highlight":
+        properties.color = this.currentColor;
+        properties.opacity = 0.5;
+        properties.quadPoints = [[p1.x, p1.y, p2.x, p1.y, p1.x, p2.y, p2.x, p2.y]];
+        break;
+      case "rectangle":
+        properties.color = this.currentColor;
+        properties.borderWidth = 2;
+        break;
+      case "circle":
+        properties.color = this.currentColor;
+        properties.borderWidth = 2;
+        break;
+      case "line":
+        properties.color = this.currentColor;
+        properties.borderWidth = 2;
+        properties.line = [[p1.x, p1.y], [p2.x, p2.y]];
+        break;
+      case "ink":
+        properties.color = this.currentColor;
+        properties.borderWidth = 2;
+        if (inkPoints && inkPoints.length > 1) {
+          // Convert screen ink points to PDF coords
+          const pdfPoints = inkPoints.map(([sx, sy]) => {
+            const p = screenToPdf(sx, sy, transform);
+            return [p.x, p.y] as [number, number];
+          });
+          properties.inkList = [pdfPoints];
+        }
+        break;
+    }
+
+    const response = await this.viewport.getRpc().send({
+      type: "createAnnot",
+      page: pageIndex,
+      annotType,
+      rect,
+      properties,
+    });
+
+    if (response.type === "annotCreated" && this.undoManager) {
+      this.undoManager.push({
+        annotId: response.annot.id,
+        property: "create",
+        previousValue: null,
+        newValue: response.annot,
+      });
+    }
+
+    await this.viewport.rerenderPage(pageIndex);
+
+    if (response.type === "annotCreated") {
+      this.select(response.annot.id);
+    }
+    this.onCreationDone?.();
+  }
+
+  // --- Overlay rendering ---
+
+  private rebuildAllOverlayContainers(): void {
+    for (const [, container] of this.overlayContainers) container.remove();
+    this.overlayContainers.clear();
+    this.overlayElements.clear();
+
+    for (const page of this.viewport.getPages()) this.ensureOverlayContainer(page.index);
+
+    for (const page of this.viewport.getPages()) {
+      const annots = this.viewport.getAnnotations(page.index);
+      if (annots.length > 0) this.renderOverlaysForPage(page.index, annots);
+    }
+  }
+
+  private ensureOverlayContainer(pageIndex: number): HTMLDivElement {
+    let container = this.overlayContainers.get(pageIndex);
+    if (!container) {
+      container = document.createElement("div");
+      container.className = "annotation-overlay-container";
+      container.dataset.page = String(pageIndex);
+
+      container.addEventListener("pointerdown", (e) => {
+        if (e.target === container) {
+          if (this.currentTool !== "select") {
+            this.startCreation(pageIndex, e);
+          } else {
+            this.select(null);
+          }
+        }
+      });
+
+      const pageWrapper = this.viewport.getPageContainer(pageIndex);
+      if (pageWrapper) pageWrapper.appendChild(container);
+      this.overlayContainers.set(pageIndex, container);
+    }
+    return container;
+  }
+
+  private renderOverlaysForPage(pageIndex: number, annotations: AnnotationDTO[]): void {
+    const container = this.ensureOverlayContainer(pageIndex);
+
+    const oldIds = new Set<string>();
+    for (const [id, el] of this.overlayElements) {
+      if (el.parentElement === container) oldIds.add(id);
+    }
+    for (const id of oldIds) {
+      this.overlayElements.get(id)?.remove();
+      this.overlayElements.delete(id);
+    }
+
+    for (const annot of annotations) {
+      if (annot.type === "Popup") continue;
+      const overlay = this.createOverlay(annot);
+      if (overlay) {
+        container.appendChild(overlay);
+        this.overlayElements.set(annot.id, overlay);
+        if (annot.id === this.selectedId) {
+          overlay.classList.add("selected");
+          this.addHandles(overlay);
+        }
+      }
+    }
+  }
+
+  private renderWidgetOverlaysForPage(pageIndex: number, widgets: WidgetDTO[]): void {
+    const container = this.ensureOverlayContainer(pageIndex);
+    const scale = this.viewport.getScale();
+
+    // Remove old widget overlays for this page
+    const oldIds = new Set<string>();
+    for (const [id, el] of this.overlayElements) {
+      if (el.parentElement === container && id.startsWith("w")) oldIds.add(id);
+    }
+    for (const id of oldIds) {
+      this.overlayElements.get(id)?.remove();
+      this.overlayElements.delete(id);
+    }
+
+    for (const widget of widgets) {
+      const screen = pdfRectToScreenRect(widget.rect, { scale, pageOffsetX: 0, pageOffsetY: 0 });
+      const div = document.createElement("div");
+      div.className = "annot-overlay widget-overlay";
+      div.dataset.annotId = widget.id;
+      div.dataset.annotType = "Widget";
+      div.dataset.widgetType = widget.fieldType;
+      div.style.left = `${screen.x}px`;
+      div.style.top = `${screen.y}px`;
+      div.style.width = `${screen.width}px`;
+      div.style.height = `${screen.height}px`;
+      div.title = `${widget.fieldType}: ${widget.fieldName}`;
+
+      div.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        this.select(widget.id);
+        if (!(e.target as HTMLElement).classList.contains("resize-handle")) {
+          this.startDrag(widget.id, e, null);
+        }
+      });
+
+      container.appendChild(div);
+      this.overlayElements.set(widget.id, div);
+
+      if (widget.id === this.selectedId) {
+        div.classList.add("selected");
+        this.addHandles(div);
+      }
+    }
+  }
+
+  private createOverlay(annot: AnnotationDTO): HTMLDivElement | null {
+    const scale = this.viewport.getScale();
+
+    if (QUADPOINT_TYPES.has(annot.type) && annot.quadPoints && annot.quadPoints.length > 0) {
+      return this.createQuadPointOverlay(annot, scale);
+    }
+
+    const rect = annot.rect;
+    if (!rect) return null;
+
+    const screen = pdfRectToScreenRect(rect, { scale, pageOffsetX: 0, pageOffsetY: 0 });
+
+    const div = document.createElement("div");
+    div.className = `annot-overlay annot-type-${annot.type.toLowerCase()}`;
+    div.dataset.annotId = annot.id;
+    div.dataset.annotType = annot.type;
+
+    if (ICON_TYPES.has(annot.type)) {
+      div.style.left = `${screen.x}px`;
+      div.style.top = `${screen.y}px`;
+      div.style.width = `${NOTE_ICON_SIZE}px`;
+      div.style.height = `${NOTE_ICON_SIZE}px`;
+      div.classList.add("annot-icon");
+      if (annot.color && annot.color.length >= 3) {
+        const [r, g, b] = annot.color;
+        div.style.backgroundColor = `rgba(${r * 255}, ${g * 255}, ${b * 255}, 0.85)`;
+      }
+      div.title = annot.contents || annot.type;
+    } else {
+      div.style.left = `${screen.x}px`;
+      div.style.top = `${screen.y}px`;
+      div.style.width = `${screen.width}px`;
+      div.style.height = `${screen.height}px`;
+      if (annot.color && annot.color.length >= 3) {
+        const [r, g, b] = annot.color;
+        const opacity = annot.opacity ?? 1;
+        div.style.borderColor = `rgba(${r * 255}, ${g * 255}, ${b * 255}, ${opacity})`;
+      }
+    }
+
+    div.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      this.select(annot.id);
+      // Start drag (move)
+      if (!(e.target as HTMLElement).classList.contains("resize-handle")) {
+        this.startDrag(annot.id, e, null);
+      }
+    });
+
+    return div;
+  }
+
+  private createQuadPointOverlay(annot: AnnotationDTO, scale: number): HTMLDivElement {
+    const quads = annot.quadPoints!;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+    for (const quad of quads) {
+      for (let i = 0; i < quad.length; i += 2) {
+        const x = (quad[i] as number) * scale;
+        const y = (quad[i + 1] as number) * scale;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+
+    const div = document.createElement("div");
+    div.className = `annot-overlay annot-type-${annot.type.toLowerCase()} annot-quadpoint`;
+    div.dataset.annotId = annot.id;
+    div.dataset.annotType = annot.type;
+    div.style.left = `${minX}px`;
+    div.style.top = `${minY}px`;
+    div.style.width = `${maxX - minX}px`;
+    div.style.height = `${maxY - minY}px`;
+
+    if (annot.color && annot.color.length >= 3) {
+      const [r, g, b] = annot.color;
+      const opacity = annot.opacity ?? 0.3;
+      div.style.backgroundColor = `rgba(${r * 255}, ${g * 255}, ${b * 255}, ${opacity})`;
+    }
+    div.title = annot.contents || annot.type;
+
+    div.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      this.select(annot.id);
+      this.startDrag(annot.id, e, null);
+    });
+
+    return div;
+  }
+
+  private updateAllOverlayPositions(): void {
+    const scale = this.viewport.getScale();
+    for (const page of this.viewport.getPages()) {
+      const annots = this.viewport.getAnnotations(page.index);
+      for (const annot of annots) {
+        const el = this.overlayElements.get(annot.id);
+        if (!el) continue;
+
+        if (QUADPOINT_TYPES.has(annot.type) && annot.quadPoints) {
+          const quads = annot.quadPoints;
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const quad of quads) {
+            for (let i = 0; i < quad.length; i += 2) {
+              minX = Math.min(minX, (quad[i] as number) * scale);
+              minY = Math.min(minY, (quad[i + 1] as number) * scale);
+              maxX = Math.max(maxX, (quad[i] as number) * scale);
+              maxY = Math.max(maxY, (quad[i + 1] as number) * scale);
+            }
+          }
+          el.style.left = `${minX}px`; el.style.top = `${minY}px`;
+          el.style.width = `${maxX - minX}px`; el.style.height = `${maxY - minY}px`;
+        } else if (ICON_TYPES.has(annot.type)) {
+          const s = pdfRectToScreenRect(annot.rect, { scale, pageOffsetX: 0, pageOffsetY: 0 });
+          el.style.left = `${s.x}px`; el.style.top = `${s.y}px`;
+        } else {
+          const s = pdfRectToScreenRect(annot.rect, { scale, pageOffsetX: 0, pageOffsetY: 0 });
+          el.style.left = `${s.x}px`; el.style.top = `${s.y}px`;
+          el.style.width = `${s.width}px`; el.style.height = `${s.height}px`;
+        }
+
+        if (annot.id === this.selectedId) {
+          this.removeHandles(el);
+          this.addHandles(el);
+        }
+      }
+    }
+  }
+
+  private addHandles(el: HTMLDivElement): void {
+    const annot = this.getAnnotationForElement(el);
+    if (annot && (ICON_TYPES.has(annot.type) || QUADPOINT_TYPES.has(annot.type))) return;
+
+    for (const pos of ["nw", "n", "ne", "e", "se", "s", "sw", "w"]) {
+      const handle = document.createElement("div");
+      handle.className = `resize-handle handle-${pos}`;
+      handle.dataset.handle = pos;
+      handle.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        const annotId = el.dataset.annotId;
+        if (annotId) this.startDrag(annotId, e, pos);
+      });
+      el.appendChild(handle);
+    }
+  }
+
+  private removeHandles(el: HTMLDivElement): void {
+    el.querySelectorAll(".resize-handle").forEach((h) => h.remove());
+  }
+
+  private getAnnotationForElement(el: HTMLDivElement): AnnotationDTO | null {
+    return el.dataset.annotId ? this.getAnnotationForId(el.dataset.annotId) : null;
+  }
+
+  private getAnnotationForId(id: string): AnnotationDTO | null {
+    for (const page of this.viewport.getPages()) {
+      const annots = this.viewport.getAnnotations(page.index);
+      const found = annots.find((a) => a.id === id);
+      if (found) return found;
+
+      // Also check widgets
+      const widgets = this.viewport.getWidgets(page.index);
+      const widget = widgets.find((w) => w.id === id);
+      if (widget) {
+        // Return a synthetic AnnotationDTO for the widget
+        return {
+          id: widget.id,
+          page: widget.page,
+          type: "Widget",
+          rect: widget.rect,
+          color: [],
+          opacity: 1,
+          contents: "",
+          borderWidth: 1,
+          hasRect: true,
+        };
+      }
+    }
+    return null;
+  }
+}
