@@ -407,6 +407,46 @@ self.onmessage = async function (e: MessageEvent) {
         break;
       }
 
+      case "addImage": {
+        const page = doc!.loadPage(request.page) as mupdf.PDFPage;
+
+        // Load image from buffer
+        const image = new mupdf.Image(request.imageData);
+        const imgW = image.getWidth();
+        const imgH = image.getHeight();
+
+        // Create a Stamp annotation at the specified rect
+        const stamp = page.createAnnotation("Stamp");
+        stamp.setRect(request.rect);
+
+        // Build appearance stream with the image
+        const imgRef = doc!.addImage(image);
+        const resources = doc!.newDictionary();
+        const xobjects = doc!.newDictionary();
+        xobjects.put("Img", imgRef);
+        resources.put("XObject", xobjects);
+
+        // PDF content stream that draws the image scaled to the rect
+        const w = request.rect[2] - request.rect[0];
+        const h = request.rect[3] - request.rect[1];
+        const content = `q ${w} 0 0 ${h} 0 0 cm /Img Do Q`;
+
+        stamp.setAppearance(
+          null, null,
+          mupdf.Matrix.identity,
+          [0, 0, w, h],
+          resources,
+          content
+        );
+
+        stamp.update();
+
+        const annots = getAnnotations(request.page);
+        const created = annots[annots.length - 1];
+        respond(_rpcId, { type: "annotCreated", annot: created });
+        break;
+      }
+
       case "replaceTextViaRedact": {
         const page = doc!.loadPage(request.page) as mupdf.PDFPage;
 

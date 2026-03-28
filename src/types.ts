@@ -103,6 +103,7 @@ export type WorkerRequest =
   | { type: "replaceTextInStream"; page: number; oldText: string; newText: string; replaceAll?: boolean }
   | { type: "replaceTextViaRedact"; page: number; rect: [number, number, number, number]; newText: string; fontSize: number; fontFamily: string; color: number[] }
   | { type: "searchText"; needle: string; page?: number }
+  | { type: "addImage"; page: number; rect: [number, number, number, number]; imageData: ArrayBuffer; mimeType: string }
   | { type: "save"; options?: string };
 
 export type WorkerResponse =

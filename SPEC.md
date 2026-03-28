@@ -489,6 +489,11 @@ One dependency. That's it.
   - [ ] E2E: Shift+click selects multiple → drag moves all
   - [ ] E2E: Large PDF (100+ pages) — renders without hanging, only visible pages loaded
 
+### Future Enhancements (Post-MVP)
+- [ ] Browser-side font glyph injection: use WASM font library (HarfBuzz/fontkit) to add missing glyphs to subsetted fonts, enabling true content stream text editing on all PDFs without redaction fallback
+- [ ] Text reflow engine: when replacement text is longer/shorter, adjust surrounding text positioning
+- [ ] CID font text editing: handle Identity-H encoded fonts by reverse-mapping ToUnicode CMap
+
 ---
 
 ## Post-MVP Roadmap

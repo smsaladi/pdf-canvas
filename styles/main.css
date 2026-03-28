@@ -97,6 +97,29 @@ body {
   border-color: transparent;
 }
 
+/* Tooltip on hover */
+.tb[title] {
+  position: relative;
+}
+
+.tb[title]:hover::after {
+  content: attr(title);
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: #111;
+  color: #eee;
+  font-size: 11px;
+  white-space: nowrap;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 200;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+}
+
 /* Active tool state */
 .tool-btn.active {
   background: var(--accent);

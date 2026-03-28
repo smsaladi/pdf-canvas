@@ -76,6 +76,7 @@ function init() {
   // Wire text edit commits
   textLayer.onCommit(async (page, oldText, newText, selection) => {
     // Strategy 1: Try content stream replacement (preserves original font)
+    console.log(`[TextEdit] Attempting content stream replacement on page ${page}...`);
     const response = await rpc.send({
       type: "replaceTextInStream",
       page,
@@ -84,6 +85,7 @@ function init() {
     });
 
     if (response.type === "textReplaced" && response.count > 0) {
+      console.log(`[TextEdit] ✓ Content stream edit succeeded (${response.count} replacement(s))`);
       markDirty();
       viewport.clearTextCache(page);
       await viewport.rerenderPage(page);
@@ -91,6 +93,7 @@ function init() {
     }
 
     // Strategy 2: Fall back to redact + FreeText overlay
+    console.log(`[TextEdit] Content stream edit found no match — falling back to redact + FreeText`);
     // Compute bounding rect from selection chars
     const chars = selection.chars;
     if (chars.length === 0) return;
@@ -113,6 +116,7 @@ function init() {
     const fontFamily = firstChar.fontFlags.isMono ? "Cour"
       : firstChar.fontFlags.isSerif ? "TiRo" : "Helv";
 
+    console.log(`[TextEdit] Redacting rect [${rect.map(n => n.toFixed(1)).join(", ")}], replacing with "${newText}" (font: ${fontFamily} ${firstChar.fontSize}pt)`);
     await rpc.send({
       type: "replaceTextViaRedact",
       page,
@@ -122,6 +126,7 @@ function init() {
       fontFamily,
       color: firstChar.color.length >= 3 ? firstChar.color : [0, 0, 0],
     });
+    console.log(`[TextEdit] ✓ Redact + FreeText fallback succeeded`);
 
     markDirty();
     viewport.clearTextCache(page);
@@ -214,6 +219,7 @@ function init() {
   // File buttons
   document.getElementById("btn-open")!.addEventListener("click", openFilePicker);
   document.getElementById("btn-save")!.addEventListener("click", saveFile);
+  document.getElementById("btn-insert-image")!.addEventListener("click", insertImage);
   document.getElementById("btn-zoom-in")!.addEventListener("click", () => viewport.setZoom(viewport.getZoom() + 0.25));
   document.getElementById("btn-zoom-out")!.addEventListener("click", () => viewport.setZoom(viewport.getZoom() - 0.25));
 
@@ -412,6 +418,40 @@ function isEditingText(): boolean {
   return active instanceof HTMLTextAreaElement
     || active instanceof HTMLInputElement
     || (active instanceof HTMLElement && active.contentEditable === "true");
+}
+
+async function insertImage(): Promise<void> {
+  if (!hasOpenDocument) return;
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/png,image/jpeg,image/gif,image/webp";
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+
+    const buffer = await file.arrayBuffer();
+    const page = viewport.getCurrentPage();
+
+    // Place image in the center of the visible area, 200x200 default
+    const pageInfo = viewport.getPages()[page];
+    const cx = pageInfo.width / 2;
+    const cy = pageInfo.height / 2;
+    const rect: [number, number, number, number] = [cx - 100, cy - 100, cx + 100, cy + 100];
+
+    console.log(`[Image] Inserting image "${file.name}" on page ${page}`);
+    const response = await rpc.send(
+      { type: "addImage", page, rect, imageData: buffer, mimeType: file.type },
+      [buffer]
+    );
+
+    if (response.type === "annotCreated") {
+      console.log(`[Image] ✓ Image added as Stamp annotation`);
+      markDirty();
+      await viewport.rerenderPage(page);
+      interaction.select(response.annot.id);
+    }
+  };
+  input.click();
 }
 
 async function saveFile(): Promise<void> {

@@ -378,7 +378,8 @@ export class TextLayer {
     this.editOverlay = null;
     this.clearHighlights();
 
-    if (newText !== oldText && newText.trim() !== "") {
+    if (newText !== oldText) {
+      console.log(`[TextEdit] Committing: "${oldText}" → "${newText}" (page ${page})`);
       for (const listener of this.commitListeners) {
         listener(page, oldText, newText, selection);
       }
