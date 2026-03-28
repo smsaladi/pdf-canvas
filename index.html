@@ -57,12 +57,25 @@
 
         <span class="toolbar-sep"></span>
 
-        <div class="toolbar-group" id="color-group">
-          <label class="color-picker-wrap" title="Border Color">
+        <div class="toolbar-group" id="style-group">
+          <label class="color-picker-wrap" title="Border / Stroke Color">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="12" height="12" rx="1"/></svg>
             <input type="color" id="toolbar-color" value="#ff0000" />
             <span class="color-swatch" id="color-swatch"></span>
           </label>
+          <label class="color-picker-wrap" title="Fill Color">
+            <svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="1" fill="currentColor" opacity="0.5"/></svg>
+            <input type="color" id="toolbar-fill-color" value="#ffffff" />
+            <span class="color-swatch" id="fill-swatch"></span>
+          </label>
+          <select id="toolbar-line-weight" class="toolbar-select" title="Line Weight">
+            <option value="1">1pt</option>
+            <option value="2" selected>2pt</option>
+            <option value="3">3pt</option>
+            <option value="4">4pt</option>
+            <option value="6">6pt</option>
+            <option value="8">8pt</option>
+          </select>
         </div>
 
         <span class="toolbar-sep"></span>

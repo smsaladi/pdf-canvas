@@ -98,11 +98,11 @@ body {
 }
 
 /* Tooltip on hover */
-.tb[title] {
+#toolbar [title] {
   position: relative;
 }
 
-.tb[title]:hover::after {
+#toolbar [title]:hover::after {
   content: attr(title);
   position: absolute;
   top: 100%;
@@ -618,6 +618,18 @@ body {
   box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.2);
   white-space: pre;
   overflow: visible;
+}
+
+/* Toolbar select */
+
+.toolbar-select {
+  padding: 3px 4px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
 }
 
 /* Creation preview */

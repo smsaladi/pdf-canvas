@@ -174,8 +174,27 @@ function init() {
       if (updated) properties.update(updated);
     }
   });
-  // Clicking the label opens the hidden input
   colorSwatch.parentElement?.addEventListener("click", () => colorInput.click());
+
+  // Fill color picker
+  const fillColorInput = document.getElementById("toolbar-fill-color") as HTMLInputElement;
+  const fillSwatch = document.getElementById("fill-swatch")!;
+  fillSwatch.style.backgroundColor = fillColorInput.value;
+  fillColorInput.addEventListener("input", () => {
+    fillSwatch.style.backgroundColor = fillColorInput.value;
+    const hex = fillColorInput.value;
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    interaction.setFillColor([r, g, b]);
+  });
+  fillSwatch.parentElement?.addEventListener("click", () => fillColorInput.click());
+
+  // Line weight
+  const lineWeightSelect = document.getElementById("toolbar-line-weight") as HTMLSelectElement;
+  lineWeightSelect.addEventListener("change", () => {
+    interaction.setBorderWidth(parseFloat(lineWeightSelect.value));
+  });
 
   // Wire property changes → worker mutations
   properties.onChange(async (event) => {
@@ -355,6 +374,13 @@ async function handleKeyDown(e: KeyboardEvent): Promise<void> {
     if (isEditingText()) return;
     e.preventDefault();
     await interaction.deleteSelected();
+    return;
+  }
+
+  // Open: Ctrl+O
+  if ((e.ctrlKey || e.metaKey) && e.key === "o") {
+    e.preventDefault();
+    openFilePicker();
     return;
   }
 

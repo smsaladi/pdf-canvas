@@ -299,6 +299,7 @@ self.onmessage = async function (e: MessageEvent) {
           if (props.contents) annot.setContents(props.contents);
           if (props.icon && annot.hasIcon()) annot.setIcon(props.icon);
           if (props.borderWidth !== undefined && annot.hasBorder()) annot.setBorderWidth(props.borderWidth);
+          if (props.interiorColor && annot.hasInteriorColor()) annot.setInteriorColor(props.interiorColor as mupdf.AnnotColor);
           if (props.quadPoints) {
             try { annot.setQuadPoints(props.quadPoints as mupdf.Quad[]); } catch {}
           }
@@ -439,6 +440,9 @@ self.onmessage = async function (e: MessageEvent) {
           content
         );
 
+        // No border on images by default
+        try { stamp.setBorderWidth(0); } catch {}
+        try { stamp.setColor([] as mupdf.AnnotColor); } catch {}
         stamp.update();
 
         const annots = getAnnotations(request.page);

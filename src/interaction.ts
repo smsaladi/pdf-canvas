@@ -59,18 +59,17 @@ export class InteractionLayer {
   private dragState: DragState | null = null;
   private creationState: CreationState | null = null;
   private currentTool: ToolMode = "select";
-  private currentColor: [number, number, number] = [1, 0, 0]; // default red
+  private currentColor: [number, number, number] = [1, 0, 0];
+  private currentFillColor: [number, number, number] | null = null;
+  private currentBorderWidth = 2;
   undoManager: UndoManager | null = null;
   textLayer: TextLayer | null = null;
   onCreationDone: (() => void) | null = null;
 
-  setColor(color: [number, number, number]): void {
-    this.currentColor = color;
-  }
-
-  getColor(): [number, number, number] {
-    return this.currentColor;
-  }
+  setColor(color: [number, number, number]): void { this.currentColor = color; }
+  getColor(): [number, number, number] { return this.currentColor; }
+  setFillColor(color: [number, number, number] | null): void { this.currentFillColor = color; }
+  setBorderWidth(width: number): void { this.currentBorderWidth = width; }
 
   constructor(viewport: Viewport) {
     this.viewport = viewport;
@@ -349,6 +348,14 @@ export class InteractionLayer {
 
     // Re-render page and refresh overlays
     await this.viewport.rerenderPage(annot.page);
+
+    // Notify selection listeners so properties panel updates
+    const updated = this.getSelectedAnnotation();
+    if (updated) {
+      for (const listener of this.selectionListeners) {
+        listener(updated);
+      }
+    }
   }
 
   private applyResize(
@@ -501,20 +508,22 @@ export class InteractionLayer {
         break;
       case "rectangle":
         properties.color = this.currentColor;
-        properties.borderWidth = 2;
+        properties.borderWidth = this.currentBorderWidth;
+        if (this.currentFillColor) properties.interiorColor = this.currentFillColor;
         break;
       case "circle":
         properties.color = this.currentColor;
-        properties.borderWidth = 2;
+        properties.borderWidth = this.currentBorderWidth;
+        if (this.currentFillColor) properties.interiorColor = this.currentFillColor;
         break;
       case "line":
         properties.color = this.currentColor;
-        properties.borderWidth = 2;
+        properties.borderWidth = this.currentBorderWidth;
         properties.line = [[p1.x, p1.y], [p2.x, p2.y]];
         break;
       case "ink":
         properties.color = this.currentColor;
-        properties.borderWidth = 2;
+        properties.borderWidth = this.currentBorderWidth;
         if (inkPoints && inkPoints.length > 1) {
           // Convert screen ink points to PDF coords
           const pdfPoints = inkPoints.map(([sx, sy]) => {
