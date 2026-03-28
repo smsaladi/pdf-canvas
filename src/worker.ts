@@ -407,6 +407,37 @@ self.onmessage = async function (e: MessageEvent) {
         break;
       }
 
+      case "replaceTextViaRedact": {
+        const page = doc!.loadPage(request.page) as mupdf.PDFPage;
+
+        // Step 1: Create Redact annotation over the old text area
+        const redact = page.createAnnotation("Redact");
+        redact.setRect(request.rect);
+
+        // Step 2: Apply redaction — removes content under the rect
+        // black_boxes=false, image_method=0 (none), line_art_method=0 (none), text_method=0 (remove)
+        page.applyRedactions(false, 0, 0, 0);
+
+        // Step 3: Create borderless FreeText annotation with new text
+        if (request.newText.trim()) {
+          const ft = page.createAnnotation("FreeText");
+          // Slightly inset the rect to avoid clipping
+          ft.setRect([request.rect[0], request.rect[1], request.rect[2], request.rect[3]]);
+          ft.setContents(request.newText);
+          ft.setDefaultAppearance(
+            request.fontFamily as string,
+            request.fontSize,
+            request.color as mupdf.AnnotColor
+          );
+          ft.setBorderWidth(0);
+          ft.setColor([]); // transparent border
+          ft.update();
+        }
+
+        respond(_rpcId, { type: "textReplaced", page: request.page, count: 1 });
+        break;
+      }
+
       case "searchText": {
         const results: TextSearchResult[] = [];
         const pageCount = doc!.countPages();
