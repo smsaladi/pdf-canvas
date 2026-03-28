@@ -74,9 +74,9 @@ function init() {
   };
 
   // Wire text edit commits
-  textLayer.onCommit(async (page, oldText, newText, selection) => {
-    // Strategy 1: Try content stream replacement (preserves original font)
-    console.log(`[TextEdit] Attempting content stream replacement on page ${page}...`);
+  textLayer.onCommit(async (page, oldText, newText, _selection) => {
+    // Content stream replacement only — redact method disabled (too aggressive with overlapping content)
+    console.log(`[TextEdit] Replacing "${oldText}" → "${newText}" on page ${page}`);
     const response = await rpc.send({
       type: "replaceTextInStream",
       page,
@@ -89,48 +89,9 @@ function init() {
       markDirty();
       viewport.clearTextCache(page);
       await viewport.rerenderPage(page);
-      return;
+    } else {
+      console.warn(`[TextEdit] ✗ Could not find "${oldText}" in page ${page} content streams. This PDF may use font encodings that prevent direct text replacement.`);
     }
-
-    // Strategy 2: Fall back to redact + FreeText overlay
-    console.log(`[TextEdit] Content stream edit found no match — falling back to redact + FreeText`);
-    // Compute bounding rect from selection chars
-    const chars = selection.chars;
-    if (chars.length === 0) return;
-
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const ch of chars) {
-      const q = ch.info.quad;
-      for (let i = 0; i < q.length; i += 2) {
-        minX = Math.min(minX, q[i]);
-        minY = Math.min(minY, q[i + 1]);
-        maxX = Math.max(maxX, q[i]);
-        maxY = Math.max(maxY, q[i + 1]);
-      }
-    }
-    // Add small padding
-    const rect: [number, number, number, number] = [minX - 0.5, minY - 0.5, maxX + 0.5, maxY + 0.5];
-
-    // Derive font info from first character
-    const firstChar = chars[0].info;
-    const fontFamily = firstChar.fontFlags.isMono ? "Cour"
-      : firstChar.fontFlags.isSerif ? "TiRo" : "Helv";
-
-    console.log(`[TextEdit] Redacting rect [${rect.map(n => n.toFixed(1)).join(", ")}], replacing with "${newText}" (font: ${fontFamily} ${firstChar.fontSize}pt)`);
-    await rpc.send({
-      type: "replaceTextViaRedact",
-      page,
-      rect,
-      newText,
-      fontSize: firstChar.fontSize,
-      fontFamily,
-      color: firstChar.color.length >= 3 ? firstChar.color : [0, 0, 0],
-    });
-    console.log(`[TextEdit] ✓ Redact + FreeText fallback succeeded`);
-
-    markDirty();
-    viewport.clearTextCache(page);
-    await viewport.rerenderPage(page);
   });
 
   // Search bar (Ctrl+F)
