@@ -204,8 +204,98 @@ export function replaceTextAt(
   return stream.slice(0, occurrence.start) + encoded + stream.slice(occurrence.end);
 }
 
+/** A TJ array with its position in the stream and decoded fragments */
+interface TJArrayInfo {
+  /** Start offset of the '[' in the stream */
+  arrayStart: number;
+  /** End offset (after the ']') in the stream */
+  arrayEnd: number;
+  /** The full concatenated decoded text */
+  fullText: string;
+  /** Individual string fragments with their positions */
+  fragments: Array<{
+    text: string;
+    start: number; // offset in stream
+    end: number;
+    isHex: boolean;
+  }>;
+  /** Raw content between [ and ] */
+  rawContent: string;
+}
+
+/** Find all TJ arrays in the stream with their concatenated text */
+function findTJArrays(stream: string): TJArrayInfo[] {
+  const results: TJArrayInfo[] = [];
+  let i = 0;
+
+  while (i < stream.length) {
+    if (stream[i] === "%" ) { while (i < stream.length && stream[i] !== "\n") i++; continue; }
+
+    if (stream[i] === "[") {
+      const arrayStart = i;
+      const bracketEnd = findMatchingBracket(stream, i);
+      if (bracketEnd !== -1) {
+        const arrayEnd = bracketEnd + 1;
+        const opInfo = findNextOperator(stream, arrayEnd);
+        if (opInfo && opInfo.op === "TJ") {
+          const rawContent = stream.slice(arrayStart + 1, bracketEnd);
+          const fragments: TJArrayInfo["fragments"] = [];
+          let fullText = "";
+
+          // Parse fragments inside the array
+          let j = 0;
+          while (j < rawContent.length) {
+            if (rawContent[j] === "(") {
+              const raw = readLiteralString(rawContent, j);
+              if (raw) {
+                const decoded = decodeLiteralString(raw);
+                fragments.push({
+                  text: decoded,
+                  start: arrayStart + 1 + j,
+                  end: arrayStart + 1 + j + raw.length,
+                  isHex: false,
+                });
+                fullText += decoded;
+                j += raw.length;
+                continue;
+              }
+            }
+            if (rawContent[j] === "<" && j + 1 < rawContent.length && rawContent[j + 1] !== "<") {
+              const closeIdx = rawContent.indexOf(">", j + 1);
+              if (closeIdx !== -1) {
+                const raw = rawContent.slice(j, closeIdx + 1);
+                const decoded = decodeHexString(raw);
+                fragments.push({
+                  text: decoded,
+                  start: arrayStart + 1 + j,
+                  end: arrayStart + 1 + j + raw.length,
+                  isHex: true,
+                });
+                fullText += decoded;
+                j = closeIdx + 1;
+                continue;
+              }
+            }
+            j++;
+          }
+
+          if (fragments.length > 0) {
+            results.push({ arrayStart, arrayEnd, fullText, fragments, rawContent });
+          }
+        }
+        i = arrayEnd;
+        continue;
+      }
+    }
+    i++;
+  }
+  return results;
+}
+
 /**
  * Find and replace text in a content stream.
+ * Handles both simple Tj strings and TJ arrays where text is split
+ * across multiple kerned fragments (common in real-world PDFs).
  * Returns the modified stream and the number of replacements made.
  */
 export function replaceTextInStream(
@@ -214,19 +304,42 @@ export function replaceTextInStream(
   newText: string,
   replaceAll = false
 ): { result: string; count: number } {
-  const occurrences = extractTextOccurrences(stream);
   let result = stream;
   let count = 0;
   let offset = 0;
 
+  // Strategy 1: Try TJ array replacement (handles kerned/split text)
+  const tjArrays = findTJArrays(stream);
+  for (const tj of tjArrays) {
+    const idx = tj.fullText.indexOf(oldText);
+    if (idx === -1) continue;
+
+    // Found! Rebuild the TJ array with replacement text.
+    // Simple approach: replace the entire array content with a single string
+    // containing the modified full text. This loses kerning but is correct.
+    const newFullText = tj.fullText.slice(0, idx) + newText + tj.fullText.slice(idx + oldText.length);
+    const newArrayContent = encodeLiteralString(newFullText);
+
+    const adjStart = tj.arrayStart + offset;
+    const adjEnd = tj.arrayEnd + offset;
+    // Replace [old array content] with [new single string]
+    const replacement = `[${newArrayContent}]`;
+    result = result.slice(0, adjStart) + replacement + result.slice(adjEnd);
+    offset += replacement.length - (tj.arrayEnd - tj.arrayStart);
+    count++;
+
+    if (!replaceAll) break;
+  }
+
+  if (count > 0) return { result, count };
+
+  // Strategy 2: Fall back to simple Tj string replacement
+  const occurrences = extractTextOccurrences(stream);
   for (const occ of occurrences) {
     const idx = occ.text.indexOf(oldText);
     if (idx === -1) continue;
 
-    // Replace within the decoded text
     const newDecodedText = occ.text.slice(0, idx) + newText + occ.text.slice(idx + oldText.length);
-
-    // Re-encode
     const encoded = occ.isHex
       ? encodeHexString(newDecodedText)
       : encodeLiteralString(newDecodedText);

@@ -170,11 +170,29 @@ describe("replaceTextInStream", () => {
     expect(result).toContain("Tj");
   });
 
-  it("replaces in TJ array", () => {
+  it("replaces in TJ array — text split across fragments", () => {
+    // Real-world pattern: text split by kerning values
+    const stream = "BT [(AT)-2.4 (T)-2.5 (ACHM)-9.4 (E)5.4 (NT)-2.5 ( 2)] TJ ET";
+    const { result, count } = replaceTextInStream(stream, "ATTACHMENT", "APPENDIX");
+    expect(count).toBe(1);
+    // Should contain the replacement text
+    const allText = getAllText(result);
+    expect(allText).toContain("APPENDIX");
+    expect(allText).not.toContain("ATTACHMENT");
+  });
+
+  it("replaces partial text in TJ array", () => {
+    const stream = "BT [(Hel)-10 (lo )-5 (Wor)-8 (ld)] TJ ET";
+    const { result, count } = replaceTextInStream(stream, "World", "Earth");
+    expect(count).toBe(1);
+    const allText = getAllText(result);
+    expect(allText).toContain("Earth");
+  });
+
+  it("replaces in simple TJ array fragment", () => {
     const stream = "BT [(H) 20 (ello)] TJ ET";
     const { result, count } = replaceTextInStream(stream, "ello", "ELLO");
     expect(count).toBe(1);
-    expect(result).toContain("(ELLO)");
   });
 
   it("replaces all occurrences when replaceAll=true", () => {

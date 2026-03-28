@@ -75,9 +75,7 @@ function init() {
 
   // Wire text edit commits
   textLayer.onCommit(async (page, oldText, newText) => {
-    markDirty();
-
-    // Try content stream replacement first
+    // Try content stream replacement
     const response = await rpc.send({
       type: "replaceTextInStream",
       page,
@@ -86,9 +84,11 @@ function init() {
     });
 
     if (response.type === "textReplaced" && response.count > 0) {
-      // Success — clear text cache and re-render
+      markDirty();
       viewport.clearTextCache(page);
       await viewport.rerenderPage(page);
+    } else {
+      console.warn(`Text replacement failed: could not find "${oldText}" in page ${page} content streams`);
     }
   });
 
