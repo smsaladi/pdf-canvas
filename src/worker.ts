@@ -1,7 +1,8 @@
 // MuPDF Web Worker — all PDF operations happen here
 import * as mupdf from "mupdf";
 import { createWorkerResponder } from "./worker-rpc";
-import type { WorkerRequest, WorkerResponse, PageInfo, AnnotationDTO } from "./types";
+import type { WorkerRequest, WorkerResponse, PageInfo, AnnotationDTO, TextBlock, TextLine, CharInfo, PageTextData, TextSearchResult } from "./types";
+import { replaceTextInStream as replaceInStream } from "./content-stream";
 
 const respond = createWorkerResponder(self);
 
@@ -317,6 +318,115 @@ self.onmessage = async function (e: MessageEvent) {
         const annots = getAnnotations(request.page);
         const created = annots[annots.length - 1];
         respond(_rpcId, { type: "annotCreated", annot: created });
+        break;
+      }
+
+      case "extractText": {
+        const page = doc!.loadPage(request.page);
+        const stext = page.toStructuredText();
+        const blocks: TextBlock[] = [];
+        let currentBlock: TextBlock | null = null;
+        let currentLine: TextLine | null = null;
+
+        stext.walk({
+          beginTextBlock(bbox: any) {
+            currentBlock = { bbox: bbox as [number, number, number, number], lines: [] };
+          },
+          beginLine(bbox: any, wmode: number, _direction: any) {
+            currentLine = { bbox: bbox as [number, number, number, number], wmode, chars: [] };
+          },
+          onChar(c: string, origin: any, font: any, size: number, quad: any, color: any) {
+            if (currentLine) {
+              currentLine.chars.push({
+                c,
+                origin: origin as [number, number],
+                quad: quad as [number, number, number, number, number, number, number, number],
+                fontSize: size,
+                fontName: font.getName(),
+                fontFlags: {
+                  isMono: font.isMono(),
+                  isSerif: font.isSerif(),
+                  isBold: font.isBold(),
+                  isItalic: font.isItalic(),
+                },
+                color: color ? (Array.isArray(color) ? color : [0, 0, 0]) : [0, 0, 0],
+              });
+            }
+          },
+          endLine() {
+            if (currentBlock && currentLine) {
+              currentBlock.lines.push(currentLine);
+              currentLine = null;
+            }
+          },
+          endTextBlock() {
+            if (currentBlock) {
+              blocks.push(currentBlock);
+              currentBlock = null;
+            }
+          },
+        });
+
+        respond(_rpcId, { type: "textExtracted", page: request.page, data: { page: request.page, blocks } });
+        break;
+      }
+
+      case "replaceTextInStream": {
+        const page = doc!.loadPage(request.page) as mupdf.PDFPage;
+        const pageObj = page.getObject();
+        const contentsRef = pageObj.get("Contents");
+
+        let totalCount = 0;
+
+        if (contentsRef.isArray()) {
+          // Multiple content streams — process each
+          const len = contentsRef.length;
+          for (let i = 0; i < len; i++) {
+            const streamRef = contentsRef.get(i);
+            if (streamRef.isStream()) {
+              const streamData = streamRef.readStream().asString();
+              const { result, count } = replaceInStream(streamData, request.oldText, request.newText, request.replaceAll ?? false);
+              if (count > 0) {
+                streamRef.writeStream(result);
+                totalCount += count;
+                if (!request.replaceAll) break;
+              }
+            }
+          }
+        } else if (contentsRef.isStream()) {
+          // Single content stream
+          const streamData = contentsRef.readStream().asString();
+          const { result, count } = replaceInStream(streamData, request.oldText, request.newText, request.replaceAll ?? false);
+          if (count > 0) {
+            contentsRef.writeStream(result);
+            totalCount = count;
+          }
+        }
+
+        respond(_rpcId, { type: "textReplaced", page: request.page, count: totalCount });
+        break;
+      }
+
+      case "searchText": {
+        const results: TextSearchResult[] = [];
+        const pageCount = doc!.countPages();
+        const startPage = request.page !== undefined ? request.page : 0;
+        const endPage = request.page !== undefined ? request.page + 1 : pageCount;
+
+        for (let i = startPage; i < endPage; i++) {
+          const page = doc!.loadPage(i);
+          const stext = page.toStructuredText();
+          const hits = stext.search(request.needle);
+          for (const quadGroup of hits) {
+            results.push({
+              page: i,
+              quads: quadGroup as unknown as number[][],
+              text: request.needle,
+            });
+          }
+        }
+
+        respond(_rpcId, { type: "searchResults", results });
         break;
       }
 

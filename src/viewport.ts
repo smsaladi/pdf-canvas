@@ -1,7 +1,7 @@
 // Viewport: continuous scroll, zoom, lazy page rendering
 
 import { WorkerRPC } from "./worker-rpc";
-import type { PageInfo, AnnotationDTO, WidgetDTO } from "./types";
+import type { PageInfo, AnnotationDTO, WidgetDTO, PageTextData } from "./types";
 import { clampZoom } from "./coords";
 
 const PAGE_GAP = 16; // px between pages
@@ -10,6 +10,7 @@ const RENDER_BUFFER = 1; // extra pages above/below viewport to pre-render
 export type ViewportEvent =
   | { type: "annotationsLoaded"; page: number; annotations: AnnotationDTO[] }
   | { type: "widgetsLoaded"; page: number; widgets: WidgetDTO[] }
+  | { type: "textExtracted"; page: number; data: PageTextData }
   | { type: "zoomChanged"; scale: number }
   | { type: "pageLayoutChanged" };
 
@@ -27,6 +28,7 @@ export class Viewport {
   private renderedAtScale = new Map<number, number>();
   private annotationCache = new Map<number, AnnotationDTO[]>();
   private widgetCache = new Map<number, WidgetDTO[]>();
+  private textCache = new Map<number, PageTextData>();
   private pendingAnnotFetches = new Set<number>();
   private zoomDisplay: HTMLElement | null = null;
   private rafId: number | null = null;
@@ -96,6 +98,28 @@ export class Viewport {
 
   getWidgets(pageIndex: number): WidgetDTO[] {
     return this.widgetCache.get(pageIndex) || [];
+  }
+
+  getTextData(pageIndex: number): PageTextData | null {
+    return this.textCache.get(pageIndex) || null;
+  }
+
+  async extractText(pageIndex: number): Promise<PageTextData | null> {
+    const response = await this.rpc.send({ type: "extractText", page: pageIndex });
+    if (response.type === "textExtracted") {
+      this.textCache.set(pageIndex, response.data);
+      this.emit({ type: "textExtracted", page: pageIndex, data: response.data });
+      return response.data;
+    }
+    return null;
+  }
+
+  clearTextCache(pageIndex?: number): void {
+    if (pageIndex !== undefined) {
+      this.textCache.delete(pageIndex);
+    } else {
+      this.textCache.clear();
+    }
   }
 
   async openDocument(buffer: ArrayBuffer): Promise<void> {

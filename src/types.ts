@@ -40,6 +40,46 @@ export interface PageInfo {
   height: number;
 }
 
+// Text extraction types
+
+export interface CharInfo {
+  c: string;
+  origin: [number, number];
+  quad: [number, number, number, number, number, number, number, number];
+  fontSize: number;
+  fontName: string;
+  fontFlags: { isMono: boolean; isSerif: boolean; isBold: boolean; isItalic: boolean };
+  color: number[];
+}
+
+export interface TextLine {
+  bbox: [number, number, number, number];
+  wmode: number;
+  chars: CharInfo[];
+}
+
+export interface TextBlock {
+  bbox: [number, number, number, number];
+  lines: TextLine[];
+}
+
+export interface PageTextData {
+  page: number;
+  blocks: TextBlock[];
+}
+
+export interface TextSearchResult {
+  page: number;
+  quads: number[][];
+  text: string;
+}
+
+export interface TextReplacement {
+  page: number;
+  oldText: string;
+  newText: string;
+}
+
 // Worker RPC message types
 
 export type WorkerRequest =
@@ -59,6 +99,9 @@ export type WorkerRequest =
   | { type: "createAnnot"; page: number; annotType: string; rect: [number, number, number, number]; properties?: Partial<AnnotationDTO> }
   | { type: "deleteAnnot"; annotId: string }
   | { type: "setWidgetValue"; widgetId: string; value: string }
+  | { type: "extractText"; page: number }
+  | { type: "replaceTextInStream"; page: number; oldText: string; newText: string; replaceAll?: boolean }
+  | { type: "searchText"; needle: string; page?: number }
   | { type: "save"; options?: string };
 
 export type WorkerResponse =
@@ -72,4 +115,7 @@ export type WorkerResponse =
   | { type: "annotCreated"; annot: AnnotationDTO }
   | { type: "annotDeleted"; annotId: string }
   | { type: "saved"; buffer: ArrayBuffer }
+  | { type: "textExtracted"; page: number; data: PageTextData }
+  | { type: "textReplaced"; page: number; count: number }
+  | { type: "searchResults"; results: TextSearchResult[] }
   | { type: "error"; message: string; requestType?: string };

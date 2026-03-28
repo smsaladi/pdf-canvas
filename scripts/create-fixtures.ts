@@ -169,6 +169,45 @@ function createRotated() {
   save(doc, "rotated.pdf");
 }
 
+// 7. with-text.pdf — page with actual text content in the content stream
+function createWithText() {
+  const doc = new mupdf.PDFDocument();
+
+  // Create a font resource
+  const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+
+  // Build resources dictionary
+  const resources = doc.newDictionary();
+  const fonts = doc.newDictionary();
+  fonts.put("F1", font);
+  resources.put("Font", fonts);
+
+  // PDF content stream with text operators
+  const contentStream = `
+BT
+/F1 24 Tf
+72 700 Td
+(Invoice #12345) Tj
+0 -36 Td
+/F1 14 Tf
+(Date: January 15, 2024) Tj
+0 -24 Td
+(Customer: John Smith) Tj
+0 -24 Td
+(Amount: $1,234.56) Tj
+0 -48 Td
+/F1 12 Tf
+(Thank you for your business.) Tj
+0 -20 Td
+(Please remit payment within 30 days.) Tj
+ET
+`;
+
+  const pageObj = doc.addPage([0, 0, 612, 792], 0, resources, contentStream);
+  doc.insertPage(-1, pageObj);
+  save(doc, "with-text.pdf");
+}
+
 // Run all generators
 createBlank();
 createWithAnnotations();
@@ -176,5 +215,7 @@ createWithComments();
 createWithForm();
 createMultiPage();
 createRotated();
+
+createWithText();
 
 console.log("\nAll fixtures generated successfully!");
