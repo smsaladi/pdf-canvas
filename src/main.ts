@@ -7,6 +7,7 @@ import { PropertiesPanel } from "./properties";
 import { UndoManager } from "./undo";
 import { Toolbar } from "./toolbar";
 import { TextLayer } from "./text-layer";
+import { SearchBar } from "./search";
 
 let rpc: WorkerRPC;
 let viewport: Viewport;
@@ -15,6 +16,7 @@ let properties: PropertiesPanel;
 let undoManager: UndoManager;
 let toolbar: Toolbar;
 let textLayer: TextLayer;
+let searchBar: SearchBar;
 let currentFilename = "document.pdf";
 let hasOpenDocument = false;
 let isDirty = false;
@@ -85,6 +87,24 @@ function init() {
 
     if (response.type === "textReplaced" && response.count > 0) {
       // Success — clear text cache and re-render
+      viewport.clearTextCache(page);
+      await viewport.rerenderPage(page);
+    }
+  });
+
+  // Search bar (Ctrl+F)
+  const searchBarEl = document.getElementById("search-bar")!;
+  searchBar = new SearchBar(searchBarEl, rpc, viewport);
+  searchBar.onReplace(async (page, oldText, newText) => {
+    markDirty();
+    const response = await rpc.send({
+      type: "replaceTextInStream",
+      page,
+      oldText,
+      newText,
+      replaceAll: true,
+    });
+    if (response.type === "textReplaced" && response.count > 0) {
       viewport.clearTextCache(page);
       await viewport.rerenderPage(page);
     }
@@ -293,6 +313,13 @@ async function handleKeyDown(e: KeyboardEvent): Promise<void> {
     if (isEditingText()) return;
     e.preventDefault();
     await interaction.deleteSelected();
+    return;
+  }
+
+  // Find: Ctrl+F
+  if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+    e.preventDefault();
+    if (hasOpenDocument) searchBar.show();
     return;
   }
 
