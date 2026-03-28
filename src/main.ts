@@ -431,12 +431,26 @@ async function insertImage(): Promise<void> {
 
     const buffer = await file.arrayBuffer();
     const page = viewport.getCurrentPage();
-
-    // Place image in the center of the visible area, 200x200 default
     const pageInfo = viewport.getPages()[page];
+
+    // Get natural image dimensions to preserve aspect ratio
+    const blob = new Blob([buffer.slice(0)], { type: file.type });
+    const imgUrl = URL.createObjectURL(blob);
+    const img = new Image();
+    await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = imgUrl; });
+    URL.revokeObjectURL(imgUrl);
+
+    // Fit image within max 300pt wide, preserving aspect ratio
+    const maxW = 300;
+    const maxH = 400;
+    let w = img.naturalWidth * 0.75; // pixels → approximate PDF points (96dpi → 72dpi)
+    let h = img.naturalHeight * 0.75;
+    if (w > maxW) { h *= maxW / w; w = maxW; }
+    if (h > maxH) { w *= maxH / h; h = maxH; }
+
     const cx = pageInfo.width / 2;
     const cy = pageInfo.height / 2;
-    const rect: [number, number, number, number] = [cx - 100, cy - 100, cx + 100, cy + 100];
+    const rect: [number, number, number, number] = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
 
     console.log(`[Image] Inserting image "${file.name}" on page ${page}`);
     const response = await rpc.send(
