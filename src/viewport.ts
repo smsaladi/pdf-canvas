@@ -1,0 +1,304 @@
+// Viewport: continuous scroll, zoom, lazy page rendering
+
+import { WorkerRPC } from "./worker-rpc";
+import type { PageInfo, AnnotationDTO, WidgetDTO } from "./types";
+import { clampZoom } from "./coords";
+
+const PAGE_GAP = 16; // px between pages
+const RENDER_BUFFER = 1; // extra pages above/below viewport to pre-render
+
+export type ViewportEvent =
+  | { type: "annotationsLoaded"; page: number; annotations: AnnotationDTO[] }
+  | { type: "widgetsLoaded"; page: number; widgets: WidgetDTO[] }
+  | { type: "zoomChanged"; scale: number }
+  | { type: "pageLayoutChanged" };
+
+type ViewportListener = (event: ViewportEvent) => void;
+
+export class Viewport {
+  private container: HTMLElement;
+  private scrollArea: HTMLElement;
+  private rpc: WorkerRPC;
+  private pages: PageInfo[] = [];
+  private scale = 1.5; // default ~108 DPI
+  private pageCanvases: Map<number, HTMLCanvasElement> = new Map();
+  private pageContainers: Map<number, HTMLDivElement> = new Map();
+  private pendingRenders = new Set<number>();
+  private renderedAtScale = new Map<number, number>();
+  private annotationCache = new Map<number, AnnotationDTO[]>();
+  private widgetCache = new Map<number, WidgetDTO[]>();
+  private pendingAnnotFetches = new Set<number>();
+  private zoomDisplay: HTMLElement | null = null;
+  private rafId: number | null = null;
+  private listeners: ViewportListener[] = [];
+
+  constructor(container: HTMLElement, rpc: WorkerRPC) {
+    this.container = container;
+    this.rpc = rpc;
+
+    this.scrollArea = document.createElement("div");
+    this.scrollArea.className = "viewport-scroll-area";
+    this.container.appendChild(this.scrollArea);
+
+    this.container.addEventListener("scroll", () => this.onScroll());
+
+    // Ctrl+wheel zoom
+    this.container.addEventListener(
+      "wheel",
+      (e) => {
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          const delta = e.deltaY > 0 ? -0.1 : 0.1;
+          this.setZoom(this.scale + delta);
+        }
+      },
+      { passive: false }
+    );
+  }
+
+  on(listener: ViewportListener): () => void {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== listener);
+    };
+  }
+
+  private emit(event: ViewportEvent) {
+    for (const listener of this.listeners) {
+      listener(event);
+    }
+  }
+
+  setZoomDisplay(el: HTMLElement) {
+    this.zoomDisplay = el;
+    this.updateZoomDisplay();
+  }
+
+  getScale(): number {
+    return this.scale;
+  }
+
+  getPages(): PageInfo[] {
+    return this.pages;
+  }
+
+  getRpc(): WorkerRPC {
+    return this.rpc;
+  }
+
+  getPageContainer(pageIndex: number): HTMLDivElement | undefined {
+    return this.pageContainers.get(pageIndex);
+  }
+
+  getAnnotations(pageIndex: number): AnnotationDTO[] {
+    return this.annotationCache.get(pageIndex) || [];
+  }
+
+  getWidgets(pageIndex: number): WidgetDTO[] {
+    return this.widgetCache.get(pageIndex) || [];
+  }
+
+  async openDocument(buffer: ArrayBuffer): Promise<void> {
+    const response = await this.rpc.send(
+      { type: "open", data: buffer },
+      [buffer]
+    );
+    if (response.type === "opened") {
+      this.pages = response.pages;
+      this.annotationCache.clear();
+      this.buildPageLayout();
+      this.scheduleRender();
+    }
+  }
+
+  setZoom(newScale: number): void {
+    const clamped = clampZoom(newScale);
+    if (clamped === this.scale) return;
+
+    const scrollFraction =
+      this.scrollArea.scrollHeight > 0
+        ? this.container.scrollTop / this.scrollArea.scrollHeight
+        : 0;
+
+    this.scale = clamped;
+    this.renderedAtScale.clear();
+    this.buildPageLayout();
+    this.updateZoomDisplay();
+
+    this.container.scrollTop = scrollFraction * this.scrollArea.scrollHeight;
+    this.emit({ type: "zoomChanged", scale: this.scale });
+    this.scheduleRender();
+  }
+
+  getZoom(): number {
+    return this.scale;
+  }
+
+  scrollToPage(pageIndex: number): void {
+    const container = this.pageContainers.get(pageIndex);
+    if (container) {
+      container.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
+  getCurrentPage(): number {
+    const scrollTop = this.container.scrollTop;
+    const containerMid = scrollTop + this.container.clientHeight / 2;
+    let bestPage = 0;
+    let bestDist = Infinity;
+
+    for (const [i, div] of this.pageContainers) {
+      const divMid = div.offsetTop + div.offsetHeight / 2;
+      const dist = Math.abs(divMid - containerMid);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestPage = i;
+      }
+    }
+    return bestPage;
+  }
+
+  /** Re-fetch annotations for a specific page (after mutation) */
+  async refreshAnnotations(pageIndex: number): Promise<AnnotationDTO[]> {
+    const response = await this.rpc.send({ type: "getAnnotations", page: pageIndex });
+    if (response.type === "annotations") {
+      this.annotationCache.set(pageIndex, response.annots);
+      this.emit({ type: "annotationsLoaded", page: pageIndex, annotations: response.annots });
+    }
+
+    // Also refresh widgets
+    const wResponse = await this.rpc.send({ type: "getWidgets", page: pageIndex });
+    if (wResponse.type === "widgets") {
+      this.widgetCache.set(pageIndex, wResponse.widgets);
+      this.emit({ type: "widgetsLoaded", page: pageIndex, widgets: wResponse.widgets });
+    }
+
+    return this.annotationCache.get(pageIndex) || [];
+  }
+
+  /** Re-render a specific page (after annotation mutation) */
+  async rerenderPage(pageIndex: number): Promise<void> {
+    this.renderedAtScale.delete(pageIndex);
+    this.pendingAnnotFetches.delete(pageIndex);
+    await this.renderPage(pageIndex);
+    // Also ensure annotations are refreshed and overlays rebuilt
+    await this.refreshAnnotations(pageIndex);
+  }
+
+  private buildPageLayout(): void {
+    this.scrollArea.innerHTML = "";
+    this.pageCanvases.clear();
+    this.pageContainers.clear();
+
+    for (const page of this.pages) {
+      const w = Math.round(page.width * this.scale);
+      const h = Math.round(page.height * this.scale);
+
+      const wrapper = document.createElement("div");
+      wrapper.className = "page-wrapper";
+      wrapper.style.width = `${w}px`;
+      wrapper.style.height = `${h}px`;
+      wrapper.style.marginBottom = `${PAGE_GAP}px`;
+      wrapper.dataset.page = String(page.index);
+
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.className = "page-canvas";
+      wrapper.appendChild(canvas);
+
+      this.scrollArea.appendChild(wrapper);
+      this.pageCanvases.set(page.index, canvas);
+      this.pageContainers.set(page.index, wrapper);
+    }
+
+    this.emit({ type: "pageLayoutChanged" });
+  }
+
+  private updateZoomDisplay(): void {
+    if (this.zoomDisplay) {
+      this.zoomDisplay.textContent = `${Math.round(this.scale * 100)}%`;
+    }
+  }
+
+  private onScroll(): void {
+    this.scheduleRender();
+  }
+
+  private scheduleRender(): void {
+    if (this.rafId !== null) return;
+    this.rafId = requestAnimationFrame(() => {
+      this.rafId = null;
+      this.renderVisiblePages();
+    });
+  }
+
+  private getVisiblePageRange(): [number, number] {
+    const scrollTop = this.container.scrollTop;
+    const viewportHeight = this.container.clientHeight;
+    const viewBottom = scrollTop + viewportHeight;
+
+    let first = -1;
+    let last = -1;
+
+    for (const [i, div] of this.pageContainers) {
+      const top = div.offsetTop;
+      const bottom = top + div.offsetHeight;
+      if (bottom >= scrollTop && top <= viewBottom) {
+        if (first === -1) first = i;
+        last = i;
+      }
+    }
+
+    if (first === -1) return [0, 0];
+
+    first = Math.max(0, first - RENDER_BUFFER);
+    last = Math.min(this.pages.length - 1, last + RENDER_BUFFER);
+    return [first, last];
+  }
+
+  private async renderPage(pageIndex: number): Promise<void> {
+    if (this.pendingRenders.has(pageIndex)) return;
+    if (this.renderedAtScale.get(pageIndex) === this.scale) return;
+
+    this.pendingRenders.add(pageIndex);
+    try {
+      const response = await this.rpc.send({
+        type: "renderPage",
+        page: pageIndex,
+        scale: this.scale,
+      });
+
+      if (response.type === "pageRendered") {
+        const canvas = this.pageCanvases.get(pageIndex);
+        if (canvas) {
+          const ctx = canvas.getContext("2d")!;
+          canvas.width = response.width;
+          canvas.height = response.height;
+          ctx.drawImage(response.bitmap, 0, 0);
+          response.bitmap.close();
+        }
+        this.renderedAtScale.set(pageIndex, this.scale);
+      }
+    } catch (err) {
+      console.error(`Failed to render page ${pageIndex}:`, err);
+    } finally {
+      this.pendingRenders.delete(pageIndex);
+    }
+
+    // Fetch annotations after rendering
+    if (!this.pendingAnnotFetches.has(pageIndex)) {
+      this.pendingAnnotFetches.add(pageIndex);
+      this.refreshAnnotations(pageIndex).catch((err) => {
+        console.error(`Failed to fetch annotations for page ${pageIndex}:`, err);
+      });
+    }
+  }
+
+  private async renderVisiblePages(): Promise<void> {
+    const [first, last] = this.getVisiblePageRange();
+    for (let i = first; i <= last; i++) {
+      await this.renderPage(i);
+    }
+  }
+}
