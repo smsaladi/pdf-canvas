@@ -129,15 +129,20 @@ export class TextLayer {
   }
 
   clearSelection(): void {
+    // Commit any in-progress edit before clearing
+    if (this.editOverlay) {
+      this.commitEdit();
+    }
     this.currentSelection = null;
     this.clearHighlights();
-    this.cancelEdit();
   }
 
   /** Handle pointerdown in text-edit mode */
   async handlePointerDown(pageIndex: number, pdfX: number, pdfY: number, e: PointerEvent): Promise<void> {
-    // Cancel any active edit
-    this.cancelEdit();
+    // Commit any active edit before starting a new interaction
+    if (this.editOverlay) {
+      this.commitEdit();
+    }
 
     // Ensure text data is extracted
     let data = this.viewport.getTextData(pageIndex);
@@ -340,12 +345,13 @@ export class TextLayer {
       }
     });
     overlay.addEventListener("blur", () => {
-      // Small delay to allow click-away detection
-      setTimeout(() => {
+      // Short delay — if pointerdown fires first it will commitEdit() directly,
+      // so we only commit here if the overlay is still active
+      requestAnimationFrame(() => {
         if (this.editOverlay === overlay) {
           this.commitEdit();
         }
-      }, 100);
+      });
     });
 
     container.appendChild(overlay);
