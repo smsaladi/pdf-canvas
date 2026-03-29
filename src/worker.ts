@@ -511,101 +511,121 @@ self.onmessage = async function (e: MessageEvent) {
           return false;
         };
 
-        // --- Step 1: Check if new text has characters missing from page fonts ---
-        // Determine which characters are NEW (in newText but not in oldText)
-        const oldChars = new Set([...request.oldText]);
-        const newChars = [...new Set(request.newText)].filter(c => !oldChars.has(c));
-        let needsAugmentation = false;
+        // --- Step 1: Check ALL characters in newText against page fonts ---
+        const allNewTextChars = [...new Set(request.newText)].filter(c => c.trim()); // unique non-whitespace chars
         let augmentedAnyFont = false;
 
-        if (newChars.length > 0) {
-          // Check each page font for missing glyphs
-          try {
-            const resources = pageObj.get("Resources");
-            const fontDict = (!resources.isNull()) ? resources.get("Font") : null;
+        console.log(`[FontAugment] Checking ${allNewTextChars.length} unique chars in new text: "${allNewTextChars.join("")}"`);
 
-            if (fontDict && !fontDict.isNull()) {
-              // Collect font keys first (forEach doesn't support async)
-              const fontKeys: string[] = [];
-              fontDict.forEach((_: any, key: string | number) => { fontKeys.push(String(key)); });
+        try {
+          const resources = pageObj.get("Resources");
+          const fontDict = (!resources.isNull()) ? resources.get("Font") : null;
 
-              for (const fontKey of fontKeys) {
+          if (fontDict && !fontDict.isNull()) {
+            const fontKeys: string[] = [];
+            fontDict.forEach((_: any, key: string | number) => { fontKeys.push(String(key)); });
+            console.log(`[FontAugment] Page has ${fontKeys.length} font(s): ${fontKeys.join(", ")}`);
+
+            for (const fontKey of fontKeys) {
+              try {
+                const fontObj = fontDict.get(fontKey);
+                const subtype = fontObj.get("Subtype").asName();
+                const baseFontName = fontObj.get("BaseFont").asName();
+
+                if (subtype !== "TrueType") {
+                  console.log(`[FontAugment] Skipping /${fontKey} "${baseFontName}" (${subtype}, not TrueType)`);
+                  continue;
+                }
+
+                const encoding = fontObj.get("Encoding");
+                const encodingName = encoding.isName() ? encoding.asName() : (encoding.isDictionary() ? "custom" : "none");
+
+                if (encodingName !== "WinAnsiEncoding" && encodingName !== "MacRomanEncoding") {
+                  console.log(`[FontAugment] Skipping /${fontKey} "${baseFontName}" (encoding: ${encodingName})`);
+                  continue;
+                }
+
+                const descriptor = fontObj.get("FontDescriptor");
+                if (descriptor.isNull()) {
+                  console.log(`[FontAugment] Skipping /${fontKey} "${baseFontName}" (no FontDescriptor)`);
+                  continue;
+                }
+
+                const fontFile2 = descriptor.get("FontFile2");
+                if (!fontFile2.isStream()) {
+                  console.log(`[FontAugment] Skipping /${fontKey} "${baseFontName}" (no FontFile2 stream)`);
+                  continue;
+                }
+
+                // Extract font binary
+                const subsetBuf = fontFile2.readStream();
+                const subsetArray = subsetBuf.asUint8Array();
+                const subsetBuffer = new ArrayBuffer(subsetArray.byteLength);
+                new Uint8Array(subsetBuffer).set(subsetArray);
+                console.log(`[FontAugment] Extracted /${fontKey} "${baseFontName}" (${subsetArray.byteLength} bytes, ${encodingName})`);
+
+                // Check EVERY character in the new text against this font
+                const missingInThisFont: string[] = [];
+                const presentInThisFont: string[] = [];
+
                 try {
-                  const fontObj = fontDict.get(fontKey);
-                  const subtype = fontObj.get("Subtype").asName();
-                  if (subtype !== "TrueType") continue;
-
-                  const encoding = fontObj.get("Encoding");
-                  const encodingName = encoding.isName() ? encoding.asName() : "";
-                  if (encodingName !== "WinAnsiEncoding" && encodingName !== "MacRomanEncoding") continue;
-
-                  const descriptor = fontObj.get("FontDescriptor");
-                  if (descriptor.isNull()) continue;
-
-                  const fontFile2 = descriptor.get("FontFile2");
-                  if (!fontFile2.isStream()) continue;
-
-                  // Extract font binary
-                  const subsetBuf = fontFile2.readStream();
-                  const subsetArray = subsetBuf.asUint8Array();
-                  const subsetBuffer = new ArrayBuffer(subsetArray.byteLength);
-                  new Uint8Array(subsetBuffer).set(subsetArray);
-
-                  const baseFontName = fontObj.get("BaseFont").asName();
-                  const missingInThisFont: string[] = [];
-
-                  // Check each new character individually using opentype.js
-                  try {
-                    const opentype = await import("opentype.js");
-                    const parsedFont = opentype.parse(subsetBuffer);
-                    if (parsedFont) {
-                      for (const ch of newChars) {
-                        const glyph = parsedFont.charToGlyph(ch);
-                        if (!glyph || glyph.index === 0) {
-                          missingInThisFont.push(ch);
-                        }
+                  const opentype = await import("opentype.js");
+                  const parsedFont = opentype.parse(subsetBuffer);
+                  if (parsedFont) {
+                    console.log(`[FontAugment] Parsed font: ${parsedFont.glyphs.length} glyphs, unitsPerEm=${parsedFont.unitsPerEm}`);
+                    for (const ch of allNewTextChars) {
+                      const glyph = parsedFont.charToGlyph(ch);
+                      if (!glyph || glyph.index === 0) {
+                        missingInThisFont.push(ch);
+                      } else {
+                        presentInThisFont.push(ch);
                       }
                     }
-                  } catch {
-                    missingInThisFont.push(...newChars);
                   }
-
-                  if (missingInThisFont.length === 0) continue;
-
-                  needsAugmentation = true;
-                  console.log(`[FontAugment] Font "${baseFontName}" missing glyphs for: ${missingInThisFont.join(", ")}`);
-
-                  // Match and fetch reference font
-                  const parsed = parseFontName(baseFontName);
-                  const flags = descriptor.get("Flags")?.asNumber?.() || 0;
-                  const match = matchReferenceFont(parsed, flags);
-                  const fontPath = getLocalFontPath(match);
-
-                  const xhr = new XMLHttpRequest();
-                  xhr.open("GET", fontPath, false);
-                  xhr.responseType = "arraybuffer";
-                  xhr.send();
-
-                  if (xhr.status !== 200 || !xhr.response) {
-                    console.warn(`[FontAugment] Failed to fetch reference font: ${fontPath}`);
-                    continue;
-                  }
-
-                  console.log(`[FontAugment] Matched "${baseFontName}" → ${match.googleFamily} (${match.confidence})`);
-                  const augmented = augmentFont(subsetBuffer, xhr.response as ArrayBuffer, missingInThisFont);
-                  if (augmented) {
-                    fontFile2.writeStream(new Uint8Array(augmented));
-                    console.log(`[FontAugment] ✓ Augmented font "${baseFontName}" with ${missingInThisFont.length} glyph(s)`);
-                    augmentedAnyFont = true;
-                  }
-                } catch (fontErr) {
-                  console.warn(`[FontAugment] Error processing font ${fontKey}:`, fontErr);
+                } catch (parseErr) {
+                  console.warn(`[FontAugment] opentype.js parse failed for "${baseFontName}":`, parseErr);
+                  missingInThisFont.push(...allNewTextChars);
                 }
+
+                console.log(`[FontAugment] /${fontKey} "${baseFontName}": present=[${presentInThisFont.join("")}] missing=[${missingInThisFont.join("")}]`);
+
+                if (missingInThisFont.length === 0) continue;
+
+                // Match and fetch reference font
+                const parsed = parseFontName(baseFontName);
+                const flags = descriptor.get("Flags")?.asNumber?.() || 0;
+                const match = matchReferenceFont(parsed, flags);
+                const fontPath = getLocalFontPath(match);
+                console.log(`[FontAugment] Matched "${baseFontName}" → ${match.googleFamily} (${match.confidence}), fetching ${fontPath}`);
+
+                const xhr = new XMLHttpRequest();
+                xhr.open("GET", fontPath, false);
+                xhr.responseType = "arraybuffer";
+                xhr.send();
+
+                if (xhr.status !== 200 || !xhr.response) {
+                  console.warn(`[FontAugment] ✗ Failed to fetch reference font: ${fontPath} (status ${xhr.status})`);
+                  continue;
+                }
+                console.log(`[FontAugment] Fetched reference font: ${(xhr.response as ArrayBuffer).byteLength} bytes`);
+
+                const augmented = augmentFont(subsetBuffer, xhr.response as ArrayBuffer, missingInThisFont);
+                if (augmented) {
+                  fontFile2.writeStream(new Uint8Array(augmented));
+                  console.log(`[FontAugment] ✓ Wrote augmented font back (${augmented.byteLength} bytes, added ${missingInThisFont.length} glyph(s): ${missingInThisFont.join(", ")})`);
+                  augmentedAnyFont = true;
+                } else {
+                  console.warn(`[FontAugment] ✗ augmentFont() returned null — opentype.js augmentation failed`);
+                }
+              } catch (fontErr) {
+                console.warn(`[FontAugment] Error processing font /${fontKey}:`, fontErr);
               }
             }
-          } catch (err) {
-            console.warn("[FontAugment] Glyph check failed:", err);
+          } else {
+            console.log(`[FontAugment] No font dictionary found on page`);
           }
+        } catch (err) {
+          console.warn("[FontAugment] Glyph check failed:", err);
         }
 
         // --- Step 2: Content stream replacement ---
