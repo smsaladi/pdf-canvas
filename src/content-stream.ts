@@ -536,55 +536,52 @@ export function replaceHexTextInStream(
     const ch = gidToUnicode.get(gid) || "";
     hexOps.push({
       gid, char: ch,
-      hexStart: m.index + 1, // position of first hex digit (after <)
-      hexEnd: m.index + 5,   // position after last hex digit (before >)
+      hexStart: m.index + 1,
+      hexEnd: m.index + 5,
     });
   }
 
   if (hexOps.length === 0) return { result: stream, count: 0, missingChars: [] };
 
-  // Check which replacement characters can be encoded
   const missingChars: string[] = [];
   for (const ch of new Set(newText)) {
     if (!unicodeToGid.has(ch)) missingChars.push(ch);
   }
 
-  // Find ALL occurrences of the old text as verified consecutive hex operators
-  const allMatches: number[] = [];
-  for (let startI = 0; startI <= hexOps.length - oldText.length; startI++) {
+  // === LINE-LEVEL MATCHING ===
+  // Instead of searching for just oldText (ambiguous), search for the
+  // ENTIRE LINE's character sequence in the hex operators. A full line
+  // is almost always unique in the document. Then locate oldText within
+  // the matched line to find the exact operators to modify.
+
+  const searchSequence = lineContext && lineContext.length > oldText.length ? lineContext : oldText;
+  const oldTextOffsetInSearch = lineContext ? lineContext.indexOf(oldText) : 0;
+
+  // Find the search sequence as verified consecutive hex operators
+  let lineMatchStart = -1;
+  for (let startI = 0; startI <= hexOps.length - searchSequence.length; startI++) {
     let matched = true;
-    for (let j = 0; j < oldText.length; j++) {
-      if (hexOps[startI + j].char !== oldText[j]) { matched = false; break; }
+    for (let j = 0; j < searchSequence.length; j++) {
+      if (hexOps[startI + j].char !== searchSequence[j]) { matched = false; break; }
     }
-    if (matched) allMatches.push(startI);
+    if (matched) { lineMatchStart = startI; break; }
   }
 
-  if (allMatches.length === 0) return { result: stream, count: 0, missingChars };
-
-  // Pick the right occurrence using line context for disambiguation
-  let matchStartIdx = allMatches[0]; // default to first
-  if (lineContext && allMatches.length > 1) {
-    // For each match, check how much surrounding text matches the line context
-    let bestScore = -1;
-    for (const startI of allMatches) {
-      // Build surrounding text (20 chars before and after the match)
-      const contextStart = Math.max(0, startI - 20);
-      const contextEnd = Math.min(hexOps.length, startI + oldText.length + 20);
-      const surrounding = hexOps.slice(contextStart, contextEnd).map(op => op.char).join("");
-      // Score: how much of lineContext appears in the surrounding text
-      let score = 0;
-      for (let len = lineContext.length; len >= 3; len--) {
-        for (let pos = 0; pos <= lineContext.length - len; pos++) {
-          if (surrounding.includes(lineContext.substring(pos, pos + len))) {
-            score = len;
-            break;
-          }
-        }
-        if (score > 0) break;
+  // The actual oldText starts at offset within the line match
+  let matchStartIdx: number;
+  if (lineMatchStart !== -1 && oldTextOffsetInSearch >= 0) {
+    matchStartIdx = lineMatchStart + oldTextOffsetInSearch;
+    console.log(`[Type0] Matched full line "${searchSequence.substring(0, 30)}..." at hex index ${lineMatchStart}, oldText at offset ${oldTextOffsetInSearch}`);
+  } else {
+    // Fallback: direct search for oldText (for cases without line context)
+    matchStartIdx = -1;
+    for (let startI = 0; startI <= hexOps.length - oldText.length; startI++) {
+      let matched = true;
+      for (let j = 0; j < oldText.length; j++) {
+        if (hexOps[startI + j].char !== oldText[j]) { matched = false; break; }
       }
-      if (score > bestScore) { bestScore = score; matchStartIdx = startI; }
+      if (matched) { matchStartIdx = startI; break; }
     }
-    console.log(`[Type0] Found ${allMatches.length} occurrences of "${oldText}", selected match at index ${matchStartIdx} (context score: ${bestScore})`);
   }
 
   if (matchStartIdx === -1) return { result: stream, count: 0, missingChars };
