@@ -46,19 +46,32 @@ function init() {
   properties = new PropertiesPanel(propsEl);
 
   // Wire selection → properties panel
+  const fillTypes = new Set(["Square", "Circle", "Line", "FreeText"]);
+  const fillColorWrap = document.querySelector<HTMLElement>("#toolbar-fill-color")?.closest(".color-picker-wrap") as HTMLElement | null;
+
   interaction.onSelectionChange((annotation) => {
     if (annotation) {
       if (annotation.type === "Widget" && annotation.id.startsWith("w")) {
-        // Find the actual WidgetDTO from the viewport cache
         const widget = findWidget(annotation.id);
         if (widget) {
           properties.showWidget(widget);
+          if (fillColorWrap) fillColorWrap.style.opacity = "0.3";
           return;
         }
       }
       properties.show(annotation);
+      // Grey out fill color for types that don't support it
+      if (fillColorWrap) {
+        fillColorWrap.style.opacity = fillTypes.has(annotation.type) ? "" : "0.3";
+        (fillColorWrap.querySelector("input") as HTMLInputElement).disabled = !fillTypes.has(annotation.type);
+      }
     } else {
       properties.hide();
+      // Enable fill color when nothing selected (for next creation)
+      if (fillColorWrap) {
+        fillColorWrap.style.opacity = "";
+        (fillColorWrap.querySelector("input") as HTMLInputElement).disabled = false;
+      }
     }
   });
 
@@ -147,20 +160,44 @@ function init() {
   const fillColorInput = document.getElementById("toolbar-fill-color") as HTMLInputElement;
   const fillSwatch = document.getElementById("fill-swatch")!;
   fillSwatch.style.backgroundColor = fillColorInput.value;
-  fillColorInput.addEventListener("input", () => {
+  fillColorInput.addEventListener("input", async () => {
     fillSwatch.style.backgroundColor = fillColorInput.value;
     const hex = fillColorInput.value;
     const r = parseInt(hex.slice(1, 3), 16) / 255;
     const g = parseInt(hex.slice(3, 5), 16) / 255;
     const b = parseInt(hex.slice(5, 7), 16) / 255;
-    interaction.setFillColor([r, g, b]);
+    const rgb: [number, number, number] = [r, g, b];
+    interaction.setFillColor(rgb);
+
+    // Also apply to selected annotation if it supports interior color
+    const selected = interaction.getSelectedAnnotation();
+    if (selected && selected.interiorColor !== undefined) {
+      undoManager.push({ annotId: selected.id, property: "interiorColor", previousValue: selected.interiorColor, newValue: rgb });
+      markDirty();
+      await rpc.send({ type: "setAnnotInteriorColor", annotId: selected.id, color: rgb });
+      await viewport.rerenderPage(selected.page);
+      const updated = interaction.getSelectedAnnotation();
+      if (updated) properties.update(updated);
+    }
   });
   fillSwatch.parentElement?.addEventListener("click", () => fillColorInput.click());
 
-  // Line weight
+  // Line weight — sets default for new annotations AND updates selected annotation
   const lineWeightSelect = document.getElementById("toolbar-line-weight") as HTMLSelectElement;
-  lineWeightSelect.addEventListener("change", () => {
-    interaction.setBorderWidth(parseFloat(lineWeightSelect.value));
+  lineWeightSelect.addEventListener("change", async () => {
+    const width = parseFloat(lineWeightSelect.value);
+    interaction.setBorderWidth(width);
+
+    // Also apply to selected annotation if one is selected
+    const selected = interaction.getSelectedAnnotation();
+    if (selected && selected.borderWidth !== undefined) {
+      undoManager.push({ annotId: selected.id, property: "borderWidth", previousValue: selected.borderWidth, newValue: width });
+      markDirty();
+      await rpc.send({ type: "setAnnotBorderWidth", annotId: selected.id, width });
+      await viewport.rerenderPage(selected.page);
+      const updated = interaction.getSelectedAnnotation();
+      if (updated) properties.update(updated);
+    }
   });
 
   // Wire property changes → worker mutations
@@ -301,6 +338,12 @@ async function applyPropertyChange(annotId: string, property: string, value: any
     case "icon":
       await rpc.send({ type: "setAnnotIcon", annotId, icon: value });
       break;
+    case "borderWidth":
+      await rpc.send({ type: "setAnnotBorderWidth", annotId, width: value });
+      break;
+    case "interiorColor":
+      await rpc.send({ type: "setAnnotInteriorColor", annotId, color: value });
+      break;
   }
 }
 
@@ -325,6 +368,12 @@ async function applyUndo(entry: { annotId: string; property: string; previousVal
       break;
     case "icon":
       await rpc.send({ type: "setAnnotIcon", annotId: entry.annotId, icon: value });
+      break;
+    case "borderWidth":
+      await rpc.send({ type: "setAnnotBorderWidth", annotId: entry.annotId, width: value });
+      break;
+    case "interiorColor":
+      await rpc.send({ type: "setAnnotInteriorColor", annotId: entry.annotId, color: value });
       break;
     case "delete": {
       // Undo delete = recreate annotation from saved DTO

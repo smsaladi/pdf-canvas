@@ -357,6 +357,120 @@ export function replaceTextInStream(
 }
 
 /**
+ * Replace text in a content stream with font-switching operators.
+ * Used for per-word bold/italic changes: wraps the replaced text
+ * with a font switch to newFontName, then restores the original font.
+ *
+ * Finds the most recent Tf operator before the text to determine
+ * the current font name and size, then inserts:
+ *   /newFont size Tf (replacement text) Tj /origFont size Tf
+ */
+export function replaceTextWithFontSwitch(
+  stream: string,
+  oldText: string,
+  newText: string,
+  newFontName: string,
+): { result: string; count: number } {
+  // Find TJ arrays first (most common in real PDFs)
+  const tjArrays = findTJArrays(stream);
+  let result = stream;
+  let offset = 0;
+
+  for (const tj of tjArrays) {
+    const idx = tj.fullText.indexOf(oldText);
+    if (idx === -1) continue;
+
+    // Find the most recent Tf operator before this TJ array to get current font/size
+    const beforeText = stream.slice(0, tj.arrayStart);
+    const tfMatch = beforeText.match(/\/(\S+)\s+([\d.]+)\s+Tf\s*$/s)
+      || beforeText.match(/\/(\S+)\s+([\d.]+)\s+Tf/gs);
+
+    let origFontName = "TT0";
+    let fontSize = "12";
+
+    if (tfMatch) {
+      // Get the LAST Tf match
+      const allMatches = [...beforeText.matchAll(/\/(\S+)\s+([\d.]+)\s+Tf/g)];
+      if (allMatches.length > 0) {
+        const lastTf = allMatches[allMatches.length - 1];
+        origFontName = lastTf[1];
+        fontSize = lastTf[2];
+      }
+    }
+
+    // Build the replacement: switch font, show text, switch back
+    const newFullText = tj.fullText.slice(0, idx) + newText + tj.fullText.slice(idx + oldText.length);
+
+    // Split into: prefix (original font), target (new font), suffix (original font)
+    const prefixText = newFullText.slice(0, idx);
+    const targetText = newText;
+    const suffixText = newFullText.slice(idx + newText.length);
+
+    let replacement = "";
+
+    // Prefix in original font (if any)
+    if (prefixText) {
+      replacement += `[${encodeLiteralString(prefixText)}] TJ `;
+    }
+
+    // Target text in new font
+    replacement += `/${newFontName} ${fontSize} Tf `;
+    replacement += `[${encodeLiteralString(targetText)}] TJ `;
+
+    // Restore original font
+    replacement += `/${origFontName} ${fontSize} Tf`;
+
+    // Suffix in original font (if any)
+    if (suffixText) {
+      replacement += ` [${encodeLiteralString(suffixText)}] TJ`;
+    }
+
+    // Find the end of the TJ operator (after the "TJ" keyword)
+    const afterArray = stream.slice(tj.arrayEnd);
+    const tjOpMatch = afterArray.match(/^\s*TJ/);
+    const tjOpEnd = tj.arrayEnd + (tjOpMatch ? tjOpMatch[0].length : 0);
+
+    const adjStart = tj.arrayStart + offset;
+    const adjEnd = tjOpEnd + offset;
+    result = result.slice(0, adjStart) + replacement + result.slice(adjEnd);
+    offset += replacement.length - (tjOpEnd - tj.arrayStart);
+
+    return { result, count: 1 };
+  }
+
+  // Fallback: try simple Tj operators
+  const occurrences = extractTextOccurrences(stream);
+  for (const occ of occurrences) {
+    const idx = occ.text.indexOf(oldText);
+    if (idx === -1) continue;
+
+    const beforeText = stream.slice(0, occ.start);
+    const allMatches = [...beforeText.matchAll(/\/(\S+)\s+([\d.]+)\s+Tf/g)];
+    let origFontName = "TT0";
+    let fontSize = "12";
+    if (allMatches.length > 0) {
+      const lastTf = allMatches[allMatches.length - 1];
+      origFontName = lastTf[1];
+      fontSize = lastTf[2];
+    }
+
+    // Find end of the Tj/TJ operator
+    const opInfo = findNextOperator(stream, occ.end);
+    const opEnd = opInfo ? opInfo.end : occ.end;
+
+    const newFullText = occ.text.slice(0, idx) + newText + occ.text.slice(idx + oldText.length);
+    const replacement = `/${newFontName} ${fontSize} Tf ${encodeLiteralString(newFullText)} Tj /${origFontName} ${fontSize} Tf`;
+
+    const adjStart = occ.start + offset;
+    const adjEnd = opEnd + offset;
+    result = result.slice(0, adjStart) + replacement + result.slice(adjEnd);
+    return { result, count: 1 };
+  }
+
+  return { result, count: 0 };
+}
+
+/**
  * Get all unique decoded text strings from the content stream.
  * Useful for building a "find" index.
  */

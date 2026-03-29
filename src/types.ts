@@ -93,6 +93,8 @@ export type WorkerRequest =
   | { type: "setAnnotColor"; annotId: string; color: number[] }
   | { type: "setAnnotContents"; annotId: string; text: string }
   | { type: "setAnnotOpacity"; annotId: string; opacity: number }
+  | { type: "setAnnotBorderWidth"; annotId: string; width: number }
+  | { type: "setAnnotInteriorColor"; annotId: string; color: number[] }
   | { type: "setAnnotIcon"; annotId: string; icon: string }
   | { type: "setAnnotQuadPoints"; annotId: string; quadPoints: number[][] }
   | { type: "setAnnotIsOpen"; annotId: string; isOpen: boolean }

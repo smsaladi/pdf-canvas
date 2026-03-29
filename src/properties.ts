@@ -97,6 +97,16 @@ export class PropertiesPanel {
     html += `<input type="range" class="props-range" data-prop="opacity" min="0" max="1" step="0.05" value="${annot.opacity}" />`;
     html += `<span class="props-value" data-display="opacity">${Math.round(annot.opacity * 100)}%</span></div>`;
 
+    // Fill color (interior color — Square, Circle, Line, FreeText)
+    const fillTypes = new Set(["Square", "Circle", "Line", "FreeText"]);
+    if (fillTypes.has(annot.type)) {
+      const fillHex = annot.interiorColor
+        ? rgbToHex(annot.interiorColor[0], annot.interiorColor[1], annot.interiorColor[2])
+        : "#ffffff";
+      html += `<div class="props-section"><label class="props-label">Fill</label>`;
+      html += `<div class="props-row"><input type="color" class="props-color" data-prop="interiorColor" value="${fillHex}" /></div></div>`;
+    }
+
     // Border width
     if (annot.borderWidth !== undefined && !isIconType(annot.type) && !isQuadPointType(annot.type)) {
       html += `<div class="props-section"><label class="props-label">Border</label>`;
@@ -169,6 +179,19 @@ export class PropertiesPanel {
       contentsDebounce = setTimeout(() => {
         this.emitChange("contents", textarea.value, this.annotation?.contents);
       }, 300);
+    });
+
+    // Fill / interior color
+    this.container.querySelector<HTMLInputElement>('[data-prop="interiorColor"]')?.addEventListener("change", (e) => {
+      const hex = (e.target as HTMLInputElement).value;
+      const rgb = hexToRgb(hex);
+      this.emitChange("interiorColor", rgb, this.annotation?.interiorColor);
+    });
+
+    // Border width
+    this.container.querySelector<HTMLInputElement>('[data-prop="borderWidth"]')?.addEventListener("change", (e) => {
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      this.emitChange("borderWidth", val, this.annotation?.borderWidth);
     });
 
     // Icon

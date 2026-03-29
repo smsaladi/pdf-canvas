@@ -2,7 +2,7 @@
 import * as mupdf from "mupdf";
 import { createWorkerResponder } from "./worker-rpc";
 import type { WorkerRequest, WorkerResponse, PageInfo, AnnotationDTO, TextBlock, TextLine, CharInfo, PageTextData, TextSearchResult } from "./types";
-import { replaceTextInStream as replaceInStream } from "./content-stream";
+import { replaceTextInStream as replaceInStream, replaceTextWithFontSwitch } from "./content-stream";
 import { parseFontName, matchReferenceFont, getLocalFontPath, augmentFont } from "./font-augment";
 
 const respond = createWorkerResponder(self);
@@ -242,6 +242,22 @@ self.onmessage = async function (e: MessageEvent) {
       case "setAnnotOpacity": {
         const { annot } = resolveAnnot(request.annotId);
         annot.setOpacity(request.opacity);
+        annot.update();
+        respond(_rpcId, { type: "annotUpdated", annotId: request.annotId });
+        break;
+      }
+
+      case "setAnnotBorderWidth": {
+        const { annot } = resolveAnnot(request.annotId);
+        annot.setBorderWidth(request.width);
+        annot.update();
+        respond(_rpcId, { type: "annotUpdated", annotId: request.annotId });
+        break;
+      }
+
+      case "setAnnotInteriorColor": {
+        const { annot } = resolveAnnot(request.annotId);
+        annot.setInteriorColor(request.color as mupdf.AnnotColor);
         annot.update();
         respond(_rpcId, { type: "annotUpdated", annotId: request.annotId });
         break;
@@ -600,6 +616,54 @@ self.onmessage = async function (e: MessageEvent) {
                 console.log(`[FontAugment] /${fontKey} "${baseFontName}": present=[${presentInThisFont.join("")}] missing=[${missingInThisFont.join("")}]`);
 
                 if (missingInThisFont.length === 0 && !hasStyleOverride) continue;
+
+                // For style overrides with no missing glyphs, use font-switching approach
+                if (hasStyleOverride && missingInThisFont.length === 0) {
+                  // Add new font with the overridden style as a separate resource
+                  const parsed = parseFontName(baseFontName);
+                  const flags = descriptor.get("Flags")?.asNumber?.() || 0;
+                  const match = matchReferenceFont(parsed, flags);
+                  if (request.boldOverride !== undefined) match.bold = request.boldOverride;
+                  if (request.italicOverride !== undefined) match.italic = request.italicOverride;
+                  const fontPath = getLocalFontPath(match);
+
+                  const xhr = new XMLHttpRequest();
+                  xhr.open("GET", fontPath, false);
+                  xhr.responseType = "arraybuffer";
+                  xhr.send();
+                  if (xhr.status !== 200 || !xhr.response) continue;
+
+                  const newFont = new mupdf.Font(baseFontName + "_edit", xhr.response as ArrayBuffer);
+                  const newFontResource = doc!.addSimpleFont(newFont, "Latin");
+                  const editFontKey = "F_edit_" + Date.now();
+                  fontDict.put(editFontKey, newFontResource);
+                  console.log(`[FontAugment] Added /${editFontKey} (${match.bold ? "Bold" : "Regular"}) for style switch`);
+
+                  // Do content stream replacement with font switching
+                  const doFontSwitchReplace = (): boolean => {
+                    const contentsRef2 = pageObj.get("Contents");
+                    if (contentsRef2.isArray()) {
+                      for (let ci = 0; ci < contentsRef2.length; ci++) {
+                        const sr = contentsRef2.get(ci);
+                        if (!sr.isStream()) continue;
+                        const data = sr.readStream().asString();
+                        const { result, count } = replaceTextWithFontSwitch(data, request.oldText, request.newText, editFontKey);
+                        if (count > 0) { sr.writeStream(result); return true; }
+                      }
+                    } else if (contentsRef2.isStream()) {
+                      const data = contentsRef2.readStream().asString();
+                      const { result, count } = replaceTextWithFontSwitch(data, request.oldText, request.newText, editFontKey);
+                      if (count > 0) { contentsRef2.writeStream(result); return true; }
+                    }
+                    return false;
+                  };
+
+                  if (doFontSwitchReplace()) {
+                    respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 1, method: "font-augment" });
+                    return;
+                  }
+                  continue;
+                }
 
                 // Match and fetch reference font, applying style overrides
                 const parsed = parseFontName(baseFontName);
