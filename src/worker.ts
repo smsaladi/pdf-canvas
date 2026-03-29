@@ -164,22 +164,38 @@ self.onmessage = async function (e: MessageEvent) {
       // --- Page image extraction ---
 
       case "getPageImages": {
-        const page = getDoc().loadPage(request.page);
-        const stext = page.toStructuredText();
+        const page = getDoc().loadPage(request.page) as mupdf.PDFPage;
         const images: import("./types").PageImageDTO[] = [];
         let imgIdx = 0;
 
-        stext.walk({
-          onImageBlock(bbox: any, _transform: any, image: any) {
+        // Use custom Device to find images (StructuredText.onImageBlock
+        // only finds inline images, not XObject images via Do operator)
+        const imgDevice = new mupdf.Device({
+          fillImage(image: mupdf.Image, ctm: mupdf.Matrix) {
+            // CTM transforms unit square to image position on page
+            // rect: [x, y, x+width, y+height] in page coords
+            const rect: [number, number, number, number] = [
+              ctm[4], ctm[5],
+              ctm[4] + ctm[0], ctm[5] + ctm[3],
+            ];
+            // Normalize rect (handle negative dimensions from flipped CTM)
+            const x0 = Math.min(rect[0], rect[2]);
+            const y0 = Math.min(rect[1], rect[3]);
+            const x1 = Math.max(rect[0], rect[2]);
+            const y1 = Math.max(rect[1], rect[3]);
+
             images.push({
               id: `img${request.page}-${imgIdx++}`,
               page: request.page,
-              rect: bbox as [number, number, number, number],
+              rect: [x0, y0, x1, y1],
               width: image.getWidth(),
               height: image.getHeight(),
             });
           },
         } as any);
+
+        page.runPageContents(imgDevice, mupdf.Matrix.identity);
+        try { (imgDevice as any).close(); } catch {}
 
         respond(_rpcId, { type: "pageImages", page: request.page, images } as any);
         break;
@@ -494,33 +510,19 @@ self.onmessage = async function (e: MessageEvent) {
                                     mupdf.emptyStore();
                                     console.log(`[ContentMap] ✓ Augmented font "${baseName}" with ${missingFromCmap.length} glyph(s)`);
 
-                                    // Update ToUnicode CMap with new entries
-                                    // Use opentype.js to find the GIDs assigned to the new chars
-                                    const opentype2 = await import("opentype.js");
-                                    const augParsed = opentype2.parse(augmented);
-                                    if (augParsed) {
-                                      const toUnicode = fo.get("ToUnicode");
-                                      if (toUnicode.isStream()) {
-                                        let cmapText = toUnicode.readStream().asString();
-                                        const newEntries: string[] = [];
-                                        for (const ch of missingFromCmap) {
-                                          const glyph = augParsed.charToGlyph(ch);
-                                          if (glyph && glyph.index > 0) {
-                                            const gidHex = glyph.index.toString(16).padStart(4, "0");
-                                            const uniHex = ch.charCodeAt(0).toString(16).padStart(4, "0");
-                                            newEntries.push(`<${gidHex}> <${uniHex}>`);
-                                            unicodeToGid.set(ch, glyph.index);
-                                            console.log(`[ContentMap] Added CMap: GID 0x${gidHex} → "${ch}" (U+${uniHex})`);
-                                          }
-                                        }
-                                        if (newEntries.length > 0) {
-                                          // Add entries to the bfchar section
-                                          cmapText = cmapText.replace(
-                                            /(\d+)\s+beginbfchar\n/,
-                                            (_, count) => `${parseInt(count) + newEntries.length} beginbfchar\n${newEntries.join("\n")}\n`
-                                          );
-                                          toUnicode.writeStream(cmapText);
-                                        }
+                                    // Directly update unicodeToGid with the GIDs we assigned.
+                                    // fonteditor-core assigned sequential indices starting from
+                                    // the original glyph count. We know exactly what they are.
+                                    const FEFont2 = (await import("fonteditor-core")).Font;
+                                    const augParsedFE = FEFont2.create(augmented as any, { type: "ttf" });
+                                    const augData = augParsedFE.get();
+                                    const augCmap = augData.cmap || {};
+                                    for (const ch of missingFromCmap) {
+                                      const cp = ch.charCodeAt(0);
+                                      const gid = augCmap[cp];
+                                      if (gid !== undefined && gid > 0) {
+                                        unicodeToGid!.set(ch, gid);
+                                        console.log(`[ContentMap] Mapped "${ch}" (U+${cp.toString(16)}) → GID ${gid} (0x${gid.toString(16)})`);
                                       }
                                     }
                                   }

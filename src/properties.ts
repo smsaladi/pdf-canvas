@@ -17,6 +17,14 @@ export class PropertiesPanel {
   private annotation: AnnotationDTO | null = null;
   private widget: WidgetDTO | null = null;
   private changeListeners: PropertyChangeListener[] = [];
+  private activeTool: string | null = null;
+  private toolDefaults: { color: number[]; borderWidth: number; opacity: number } | null = null;
+  /** Listeners for tool default changes (color/size/opacity set before drawing) */
+  private toolChangeListeners: Array<(prop: string, value: any) => void> = [];
+
+  onToolDefaultChange(listener: (prop: string, value: any) => void): void {
+    this.toolChangeListeners.push(listener);
+  }
 
   constructor(panel: HTMLElement) {
     this.panel = panel;
@@ -37,6 +45,19 @@ export class PropertiesPanel {
     }
   }
 
+  private emitToolChange(prop: string, value: any) {
+    if (this.toolDefaults) {
+      if (prop === "color") this.toolDefaults.color = value;
+      if (prop === "borderWidth") this.toolDefaults.borderWidth = value;
+      if (prop === "opacity") this.toolDefaults.opacity = value;
+    }
+    for (const listener of this.toolChangeListeners) {
+      listener(prop, value);
+    }
+    // Re-render to update selected state
+    if (this.activeTool) this.renderToolPanel();
+  }
+
   show(annotation: AnnotationDTO): void {
     this.annotation = annotation;
     this.widget = null;
@@ -54,8 +75,28 @@ export class PropertiesPanel {
   hide(): void {
     this.annotation = null;
     this.widget = null;
+    this.activeTool = null;
     this.panel.classList.remove("open");
     this.render();
+  }
+
+  /** Show visual panel for a drawing tool (before any annotation is created) */
+  showToolPanel(tool: string, color: number[], borderWidth: number, opacity: number): void {
+    this.annotation = null;
+    this.widget = null;
+    this.activeTool = tool;
+    this.toolDefaults = { color, borderWidth, opacity };
+    this.panel.classList.add("open");
+    this.renderToolPanel();
+  }
+
+  hideToolPanel(): void {
+    if (this.activeTool && !this.annotation) {
+      this.activeTool = null;
+      this.toolDefaults = null;
+      this.panel.classList.remove("open");
+      this.render();
+    }
   }
 
   update(annotation: AnnotationDTO): void {
@@ -80,6 +121,12 @@ export class PropertiesPanel {
 
     let html = `<div class="props-content">`;
     html += `<h3 class="props-type">${escapeHtml(annot.type)}</h3>`;
+
+    // Visual panel for drawing annotations
+    const drawingTypes = new Set(["Ink", "Line", "Square", "Circle", "Highlight", "FreeText"]);
+    if (drawingTypes.has(annot.type)) {
+      html += this.renderVisualPanel(annot, colorHex);
+    }
 
     // Position (editable)
     const w = annot.rect[2] - annot.rect[0], h = annot.rect[3] - annot.rect[1];
@@ -175,7 +222,133 @@ export class PropertiesPanel {
     this.bindInputEvents();
   }
 
+  private renderVisualPanel(annot: AnnotationDTO, colorHex: string): string {
+    let html = "";
+
+    // --- Size selector ---
+    const sizes = [1, 2, 3, 5, 8];
+    const currentSize = annot.borderWidth ?? 2;
+    html += `<div class="vp-section"><div class="vp-label">Size</div><div class="vp-sizes">`;
+    for (const s of sizes) {
+      const sel = Math.abs(currentSize - s) < 0.5 ? " vp-selected" : "";
+      html += `<button class="vp-size-btn${sel}" data-vp-size="${s}" title="${s}pt">`;
+      html += `<svg width="36" height="36" viewBox="0 0 36 36"><line x1="6" y1="30" x2="30" y2="6" stroke="currentColor" stroke-width="${s}" stroke-linecap="round"/></svg>`;
+      html += `</button>`;
+    }
+    html += `</div></div>`;
+
+    // --- Color palette (pastels for highlights, vivids for drawing) ---
+    const isHighlight = annot.type === "Highlight";
+    const palette = isHighlight ? [
+      "#FFFF00", "#FFE082", "#A5D6A7", "#90CAF9", "#CE93D8",
+      "#FFF9C4", "#FFE0B2", "#C8E6C9", "#BBDEFB", "#E1BEE7",
+      "#FF8A80", "#FFD180", "#B9F6CA", "#82B1FF", "#EA80FC",
+      "#FF5252", "#FFAB40", "#69F0AE", "#448AFF", "#E040FB",
+    ] : [
+      "#000000", "#808080", "#BBBBBB", "#DDDDDD", "#FFFFFF",
+      "#F28B82", "#FBBC04", "#34A853", "#4285F4", "#DEB887",
+      "#EA4335", "#F9AB00", "#1E8E3E", "#1A73E8", "#A0522D",
+      "#B71C1C", "#E65100", "#1B5E20", "#0D47A1", "#4E342E",
+    ];
+    const currentColor = colorHex.toUpperCase();
+    html += `<div class="vp-section"><div class="vp-label">Color</div><div class="vp-colors">`;
+    for (const c of palette) {
+      const sel = currentColor === c.toUpperCase() ? " vp-selected" : "";
+      html += `<button class="vp-color-btn${sel}" data-vp-color="${c}" title="${c}">`;
+      html += `<span class="vp-swatch" style="background:${c}"></span>`;
+      html += `</button>`;
+    }
+    // Custom color at end
+    html += `<label class="vp-color-btn vp-custom" title="Custom color">`;
+    html += `<span class="vp-swatch" style="background: conic-gradient(red, yellow, lime, aqua, blue, magenta, red)"></span>`;
+    html += `<input type="color" class="vp-color-custom-input" value="${colorHex}" />`;
+    html += `</label>`;
+    html += `</div></div>`;
+
+    // --- Opacity quick buttons ---
+    const opacities = [0.25, 0.5, 0.75, 1.0];
+    html += `<div class="vp-section"><div class="vp-label">Opacity</div><div class="vp-opacities">`;
+    for (const o of opacities) {
+      const sel = Math.abs(annot.opacity - o) < 0.05 ? " vp-selected" : "";
+      html += `<button class="vp-opacity-btn${sel}" data-vp-opacity="${o}">${Math.round(o * 100)}%</button>`;
+    }
+    html += `</div></div>`;
+
+    return html;
+  }
+
+  private renderToolPanel(): void {
+    if (!this.toolDefaults) return;
+    const { color, borderWidth, opacity } = this.toolDefaults;
+    const colorHex = color.length >= 3
+      ? rgbToHex(color[0], color[1], color[2]) : "#ff0000";
+
+    // Build a fake AnnotationDTO for renderVisualPanel
+    const toolToType: Record<string, string> = {
+      ink: "Ink", line: "Line", rectangle: "Square", circle: "Circle", highlight: "Highlight",
+    };
+    const fakeAnnot: AnnotationDTO = {
+      id: "", page: 0, type: toolToType[this.activeTool!] || "Ink", rect: [0, 0, 0, 0],
+      color, opacity, contents: "", borderWidth, hasRect: false,
+    };
+
+    let html = `<div class="props-content">`;
+    html += `<h3 class="props-type" style="text-transform:capitalize">${this.activeTool} Tool</h3>`;
+    html += this.renderVisualPanel(fakeAnnot, colorHex);
+    html += `</div>`;
+    this.container.innerHTML = html;
+    this.bindInputEvents();
+  }
+
   private bindInputEvents(): void {
+    // Visual panel: size buttons
+    for (const btn of this.container.querySelectorAll<HTMLButtonElement>("[data-vp-size]")) {
+      btn.addEventListener("click", () => {
+        const size = parseFloat(btn.dataset.vpSize!);
+        if (this.annotation) {
+          this.emitChange("borderWidth", size, this.annotation.borderWidth);
+        } else {
+          this.emitToolChange("borderWidth", size);
+        }
+      });
+    }
+
+    // Visual panel: color buttons
+    for (const btn of this.container.querySelectorAll<HTMLButtonElement>("[data-vp-color]")) {
+      btn.addEventListener("click", () => {
+        const hex = btn.dataset.vpColor!;
+        const rgb = hexToRgb(hex);
+        if (this.annotation) {
+          this.emitChange("color", rgb, this.annotation.color);
+        } else {
+          this.emitToolChange("color", rgb);
+        }
+      });
+    }
+
+    // Visual panel: custom color input
+    this.container.querySelector<HTMLInputElement>(".vp-color-custom-input")?.addEventListener("change", (e) => {
+      const hex = (e.target as HTMLInputElement).value;
+      const rgb = hexToRgb(hex);
+      if (this.annotation) {
+        this.emitChange("color", rgb, this.annotation.color);
+      } else {
+        this.emitToolChange("color", hexToRgb(hex));
+      }
+    });
+
+    // Visual panel: opacity buttons
+    for (const btn of this.container.querySelectorAll<HTMLButtonElement>("[data-vp-opacity]")) {
+      btn.addEventListener("click", () => {
+        const opacity = parseFloat(btn.dataset.vpOpacity!);
+        if (this.annotation) {
+          this.emitChange("opacity", opacity, this.annotation.opacity);
+        } else {
+          this.emitToolChange("opacity", opacity);
+        }
+      });
+    }
+
     // Position (x, y, w, h)
     const posHandler = () => {
       if (!this.annotation) return;

@@ -82,9 +82,22 @@ function init() {
 
   // Toolbar
   toolbar = new Toolbar();
+  const drawingTools = new Set(["ink", "line", "rectangle", "circle", "highlight"]);
   toolbar.onChange((tool) => {
     interaction.setTool(tool);
     if (tool !== "select") interaction.select(null);
+    // Show visual panel for drawing tools
+    if (drawingTools.has(tool)) {
+      properties.showToolPanel(tool, interaction.getColor(), 2, 1.0);
+    } else {
+      properties.hideToolPanel();
+    }
+  });
+
+  // When tool defaults change from the visual panel, update the interaction layer
+  properties.onToolDefaultChange((prop, value) => {
+    if (prop === "color") interaction.setColor(value);
+    if (prop === "borderWidth") interaction.setBorderWidth(value);
   });
   interaction.onCreationDone = () => {
     toolbar.setTool("select");
