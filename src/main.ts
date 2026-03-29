@@ -1,4 +1,5 @@
 // PDF Canvas — App entry point
+// Wiring and initialization. Logic is in ./app/ sub-modules.
 
 import { WorkerRPC } from "./worker-rpc";
 import { Viewport } from "./viewport";
@@ -9,41 +10,35 @@ import { Toolbar } from "./toolbar";
 import { TextLayer } from "./text-layer";
 import { SearchBar } from "./search";
 
-let rpc: WorkerRPC;
-let viewport: Viewport;
-let interaction: InteractionLayer;
-let properties: PropertiesPanel;
-let undoManager: UndoManager;
-let toolbar: Toolbar;
-let textLayer: TextLayer;
-let searchBar: SearchBar;
-let currentFilename = "document.pdf";
-let hasOpenDocument = false;
-let isDirty = false;
+import { app } from "./app/state";
+import { markDirty, markClean, findWidget, showWelcome, updatePageDisplay, isEditingText } from "./app/utils";
+import { applyPropertyChange, applyUndo } from "./app/property-mutations";
+import { openFile, openFilePicker, saveFile, insertImage, setupDragDrop } from "./app/file-ops";
+import { handleKeyDown } from "./app/keyboard";
 
 function init() {
-  const worker = new Worker(new URL("./worker.ts", import.meta.url), {
-    type: "module",
-  });
-  rpc = new WorkerRPC(worker);
+  const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+  const rpc = new WorkerRPC(worker);
+  app.rpc = rpc;
 
   const viewportEl = document.getElementById("viewport")!;
-  viewport = new Viewport(viewportEl, rpc);
+  const viewport = new Viewport(viewportEl, rpc);
+  app.viewport = viewport;
 
-  // Undo manager
-  undoManager = new UndoManager(50);
+  const undoManager = new UndoManager(50);
+  app.undoManager = undoManager;
 
-  // Text layer (for text editing)
-  textLayer = new TextLayer(viewport);
+  const textLayer = new TextLayer(viewport);
+  app.textLayer = textLayer;
 
-  // Interaction layer
-  interaction = new InteractionLayer(viewport);
+  const interaction = new InteractionLayer(viewport);
   interaction.undoManager = undoManager;
   interaction.textLayer = textLayer;
+  app.interaction = interaction;
 
-  // Properties panel
   const propsEl = document.getElementById("properties-panel")!;
-  properties = new PropertiesPanel(propsEl);
+  const properties = new PropertiesPanel(propsEl);
+  app.properties = properties;
 
   // Wire selection → properties panel
   const fillTypes = new Set(["Square", "Circle", "Line", "FreeText"]);
@@ -60,19 +55,17 @@ function init() {
         }
       }
       if (annotation.type === "Image" && annotation.id.startsWith("img")) {
-        properties.show(annotation); // Shows image info in properties panel
+        properties.show(annotation);
         if (fillColorWrap) fillColorWrap.style.opacity = "0.3";
         return;
       }
       properties.show(annotation);
-      // Grey out fill color for types that don't support it
       if (fillColorWrap) {
         fillColorWrap.style.opacity = fillTypes.has(annotation.type) ? "" : "0.3";
         (fillColorWrap.querySelector("input") as HTMLInputElement).disabled = !fillTypes.has(annotation.type);
       }
     } else {
       properties.hide();
-      // Enable fill color when nothing selected (for next creation)
       if (fillColorWrap) {
         fillColorWrap.style.opacity = "";
         (fillColorWrap.querySelector("input") as HTMLInputElement).disabled = false;
@@ -81,12 +74,12 @@ function init() {
   });
 
   // Toolbar
-  toolbar = new Toolbar();
+  const toolbar = new Toolbar();
+  app.toolbar = toolbar;
   const drawingTools = new Set(["ink", "line", "rectangle", "circle", "highlight"]);
   toolbar.onChange((tool) => {
     interaction.setTool(tool);
     if (tool !== "select") interaction.select(null);
-    // Show visual panel for drawing tools
     if (drawingTools.has(tool)) {
       properties.showToolPanel(tool, interaction.getColor(), 2, 1.0);
     } else {
@@ -94,7 +87,6 @@ function init() {
     }
   });
 
-  // When tool defaults change from the visual panel, update the interaction layer
   properties.onToolDefaultChange((prop, value) => {
     if (prop === "color") interaction.setColor(value);
     if (prop === "borderWidth") interaction.setBorderWidth(value);
@@ -106,21 +98,14 @@ function init() {
 
   // Wire text edit commits
   textLayer.onCommit(async (page, oldText, newText, selection, styleOverride) => {
-    // Get the font name and line context for disambiguation
     const selFontName = selection.chars[0]?.info.fontName || undefined;
     const lineContext = (selection as any)._lineContext || "";
     const selectionY = (selection as any)._selectionY;
     console.log(`[TextEdit] Replacing "${oldText}" → "${newText}" on page ${page} (font: ${selFontName || "unknown"}, y=${selectionY?.toFixed(1)}, line: "${lineContext.substring(0, 40)}")`);
     const response = await rpc.send({
-      type: "replaceTextSmart",
-      page,
-      oldText,
-      newText,
-      boldOverride: styleOverride?.bold,
-      italicOverride: styleOverride?.italic,
-      fontName: selFontName,
-      lineContext,
-      selectionY,
+      type: "replaceTextSmart", page, oldText, newText,
+      boldOverride: styleOverride?.bold, italicOverride: styleOverride?.italic,
+      fontName: selFontName, lineContext, selectionY,
     } as any);
 
     if (response.type === "textReplacedSmart") {
@@ -137,15 +122,12 @@ function init() {
 
   // Search bar (Ctrl+F)
   const searchBarEl = document.getElementById("search-bar")!;
-  searchBar = new SearchBar(searchBarEl, rpc, viewport);
+  const searchBar = new SearchBar(searchBarEl, rpc, viewport);
+  app.searchBar = searchBar;
   searchBar.onReplace(async (page, oldText, newText) => {
     markDirty();
     const response = await rpc.send({
-      type: "replaceTextInStream",
-      page,
-      oldText,
-      newText,
-      replaceAll: true,
+      type: "replaceTextInStream", page, oldText, newText, replaceAll: true,
     });
     if (response.type === "textReplaced" && response.count > 0) {
       viewport.clearTextCache(page);
@@ -166,7 +148,6 @@ function init() {
     const rgb: [number, number, number] = [r, g, b];
     interaction.setColor(rgb);
 
-    // Also apply to selected annotation immediately
     const selected = interaction.getSelectedAnnotation();
     if (selected) {
       undoManager.push({ annotId: selected.id, property: "color", previousValue: selected.color, newValue: rgb });
@@ -191,7 +172,6 @@ function init() {
     const rgb: [number, number, number] = [r, g, b];
     interaction.setFillColor(rgb);
 
-    // Also apply to selected annotation if it supports interior color
     const selected = interaction.getSelectedAnnotation();
     if (selected && selected.interiorColor !== undefined) {
       undoManager.push({ annotId: selected.id, property: "interiorColor", previousValue: selected.interiorColor, newValue: rgb });
@@ -204,13 +184,12 @@ function init() {
   });
   fillSwatch.parentElement?.addEventListener("click", () => fillColorInput.click());
 
-  // Line weight — sets default for new annotations AND updates selected annotation
+  // Line weight
   const lineWeightSelect = document.getElementById("toolbar-line-weight") as HTMLSelectElement;
   lineWeightSelect.addEventListener("change", async () => {
     const width = parseFloat(lineWeightSelect.value);
     interaction.setBorderWidth(width);
 
-    // Also apply to selected annotation if one is selected
     const selected = interaction.getSelectedAnnotation();
     if (selected && selected.borderWidth !== undefined) {
       undoManager.push({ annotId: selected.id, property: "borderWidth", previousValue: selected.borderWidth, newValue: width });
@@ -231,7 +210,6 @@ function init() {
       return;
     }
 
-    // Handle widget value changes
     if (property === "widgetValue") {
       markDirty();
       await rpc.send({ type: "setWidgetValue", widgetId: annotId, value });
@@ -240,18 +218,13 @@ function init() {
       return;
     }
 
-    // Push undo entry and mark dirty
     undoManager.push({ annotId, property, previousValue: oldValue, newValue: value });
     markDirty();
-
-    // Dispatch to worker
     await applyPropertyChange(annotId, property, value);
 
-    // Re-render and refresh
     const annot = interaction.getSelectedAnnotation();
     if (annot) {
       await viewport.rerenderPage(annot.page);
-      // Refresh selection to get updated annotation data
       const updated = interaction.getSelectedAnnotation();
       if (updated) properties.update(updated);
     }
@@ -267,7 +240,7 @@ function init() {
   document.getElementById("btn-insert-image")!.addEventListener("click", insertImage);
   document.getElementById("btn-zoom-in")!.addEventListener("click", () => viewport.setZoom(viewport.getZoom() + 0.25));
   document.getElementById("btn-zoom-out")!.addEventListener("click", () => viewport.setZoom(viewport.getZoom() - 0.25));
-  // Fit width / fit height toggle
+
   const fitBtn = document.getElementById("btn-fit-toggle")!;
   const fitWidthIcon = document.getElementById("fit-width-icon")!;
   const fitHeightIcon = document.getElementById("fit-height-icon")!;
@@ -290,7 +263,7 @@ function init() {
 
   // Rotate counterclockwise
   document.getElementById("btn-rotate-ccw")!.addEventListener("click", async () => {
-    if (!hasOpenDocument) return;
+    if (!app.hasOpenDocument) return;
     const page = viewport.getCurrentPage();
     const response = await rpc.send({ type: "rotatePage", page, angle: -90 });
     if (response.type === "pageRotated") {
@@ -338,7 +311,7 @@ function init() {
   // Keyboard shortcuts
   document.addEventListener("keydown", handleKeyDown);
 
-  // Space bar pan: hold Space to drag-pan the viewport
+  // Space bar pan
   let isPanning = false;
   let panStart = { x: 0, y: 0, scrollLeft: 0, scrollTop: 0 };
   document.addEventListener("keydown", (e) => {
@@ -346,7 +319,7 @@ function init() {
       e.preventDefault();
       isPanning = true;
       viewportEl.style.cursor = "grab";
-      interaction.setTool("select"); // suppress creation tools during pan
+      interaction.setTool("select");
     }
   });
   document.addEventListener("keyup", (e) => {
@@ -374,453 +347,18 @@ function init() {
       document.addEventListener("pointermove", onMove);
       document.addEventListener("pointerup", onUp);
     }
-  }, true); // capture phase to intercept before interaction layer
+  }, true);
 
   // Warn before losing work
   window.addEventListener("beforeunload", (e) => {
-    if (hasOpenDocument) e.preventDefault();
+    if (app.hasOpenDocument) e.preventDefault();
   });
 
   showWelcome(true);
 }
 
-async function applyPropertyChange(annotId: string, property: string, value: any): Promise<void> {
-  switch (property) {
-    case "rect":
-      await rpc.send({ type: "setAnnotRect", annotId, rect: value });
-      break;
-    case "color":
-      await rpc.send({ type: "setAnnotColor", annotId, color: value });
-      break;
-    case "opacity":
-      await rpc.send({ type: "setAnnotOpacity", annotId, opacity: value });
-      break;
-    case "contents":
-      await rpc.send({ type: "setAnnotContents", annotId, text: value });
-      break;
-    case "icon":
-      await rpc.send({ type: "setAnnotIcon", annotId, icon: value });
-      break;
-    case "borderWidth":
-      await rpc.send({ type: "setAnnotBorderWidth", annotId, width: value });
-      break;
-    case "borderStyle":
-      await rpc.send({ type: "setAnnotBorderStyle", annotId, style: value });
-      break;
-    case "interiorColor":
-      await rpc.send({ type: "setAnnotInteriorColor", annotId, color: value });
-      break;
-    case "defaultAppearance":
-      await rpc.send({ type: "setAnnotDefaultAppearance", annotId, font: value.font, size: value.size, color: value.color });
-      break;
-  }
-}
-
-async function applyUndo(entry: { annotId: string; property: string; previousValue: any; newValue: any }, value: any): Promise<void> {
-  const pageIndex = parseInt(entry.annotId.split("-")[0]);
-
-  switch (entry.property) {
-    case "rect":
-      await rpc.send({ type: "setAnnotRect", annotId: entry.annotId, rect: value });
-      break;
-    case "quadPoints":
-      await rpc.send({ type: "setAnnotQuadPoints", annotId: entry.annotId, quadPoints: value });
-      break;
-    case "color":
-      await rpc.send({ type: "setAnnotColor", annotId: entry.annotId, color: value });
-      break;
-    case "opacity":
-      await rpc.send({ type: "setAnnotOpacity", annotId: entry.annotId, opacity: value });
-      break;
-    case "contents":
-      await rpc.send({ type: "setAnnotContents", annotId: entry.annotId, text: value });
-      break;
-    case "icon":
-      await rpc.send({ type: "setAnnotIcon", annotId: entry.annotId, icon: value });
-      break;
-    case "borderWidth":
-      await rpc.send({ type: "setAnnotBorderWidth", annotId: entry.annotId, width: value });
-      break;
-    case "borderStyle":
-      await rpc.send({ type: "setAnnotBorderStyle", annotId: entry.annotId, style: value });
-      break;
-    case "interiorColor":
-      await rpc.send({ type: "setAnnotInteriorColor", annotId: entry.annotId, color: value });
-      break;
-    case "defaultAppearance":
-      await rpc.send({ type: "setAnnotDefaultAppearance", annotId: entry.annotId, font: value.font, size: value.size, color: value.color });
-      break;
-    case "delete": {
-      // Undo delete = recreate annotation from saved DTO
-      const dto = entry.previousValue as import("./types").AnnotationDTO;
-      await rpc.send({
-        type: "createAnnot",
-        page: dto.page,
-        annotType: dto.type,
-        rect: dto.rect,
-        properties: dto,
-      });
-      break;
-    }
-    case "create": {
-      // Undo create = delete the annotation
-      // value is the DTO, which means: undo → delete the annotId, redo → recreate
-      if (value === null) {
-        // This is the undo direction (previousValue=null means "before creation, nothing existed")
-        // The annotId is from the entry, delete it
-        await rpc.send({ type: "deleteAnnot", annotId: entry.annotId });
-      } else {
-        // Redo direction — recreate
-        const dto = value as import("./types").AnnotationDTO;
-        await rpc.send({
-          type: "createAnnot",
-          page: dto.page,
-          annotType: dto.type,
-          rect: dto.rect,
-          properties: dto,
-        });
-      }
-      break;
-    }
-  }
-
-  await viewport.rerenderPage(pageIndex);
-  const updated = interaction.getSelectedAnnotation();
-  if (updated) properties.update(updated);
-}
-
-async function handleKeyDown(e: KeyboardEvent): Promise<void> {
-  // Escape: deselect
-  if (e.key === "Escape" && interaction.getSelectedId()) {
-    if (isEditingText()) return;
-    e.preventDefault();
-    interaction.select(null);
-    return;
-  }
-
-  // Delete selected annotation
-  if ((e.key === "Delete" || e.key === "Backspace") && interaction.getSelectedId()) {
-    // Don't delete if we're focused on an input
-    if (isEditingText()) return;
-    e.preventDefault();
-    await interaction.deleteSelected();
-    return;
-  }
-
-  // Open: Ctrl+O
-  if ((e.ctrlKey || e.metaKey) && e.key === "o") {
-    e.preventDefault();
-    openFilePicker();
-    return;
-  }
-
-  // Find: Ctrl+F
-  if ((e.ctrlKey || e.metaKey) && e.key === "f") {
-    e.preventDefault();
-    if (hasOpenDocument) searchBar.show();
-    return;
-  }
-
-  // Undo: Ctrl+Z
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === "z") {
-    e.preventDefault();
-    const entry = undoManager.undo();
-    if (entry) await applyUndo(entry, entry.previousValue);
-    return;
-  }
-
-  // Redo: Ctrl+Shift+Z or Ctrl+Y
-  if ((e.ctrlKey || e.metaKey) && (e.shiftKey && e.key === "z" || e.key === "y")) {
-    e.preventDefault();
-    const entry = undoManager.redo();
-    if (entry) await applyUndo(entry, entry.newValue);
-    return;
-  }
-
-  // Save: Ctrl+S
-  if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-    e.preventDefault();
-    await saveFile();
-    return;
-  }
-
-  // Tool shortcuts (single key, no modifier, not while editing text)
-  if (!e.ctrlKey && !e.metaKey && !e.altKey && !isEditingText()) {
-    const toolKeys: Record<string, import("./toolbar").ToolMode> = {
-      v: "select", p: "hand", t: "textedit", n: "note", f: "freetext",
-      h: "highlight", r: "rectangle", c: "circle", l: "line", d: "ink",
-    };
-    const tool = toolKeys[e.key.toLowerCase()];
-    if (tool) {
-      e.preventDefault();
-      toolbar.setTool(tool);
-      return;
-    }
-  }
-
-  // Duplicate: Ctrl+D
-  if ((e.ctrlKey || e.metaKey) && e.key === "d") {
-    e.preventDefault();
-    if (interaction.getSelectedId()) {
-      await duplicateSelected();
-    }
-    return;
-  }
-
-  // Copy: Ctrl+C (annotation, not text)
-  if ((e.ctrlKey || e.metaKey) && e.key === "c" && !isEditingText()) {
-    const annot = interaction.getSelectedAnnotation();
-    if (annot) {
-      e.preventDefault();
-      clipboardAnnot = { ...annot };
-    }
-    return;
-  }
-
-  // Paste: Ctrl+V (annotation)
-  if ((e.ctrlKey || e.metaKey) && e.key === "v" && !isEditingText() && clipboardAnnot) {
-    e.preventDefault();
-    await pasteAnnotation();
-    return;
-  }
-
-  // Tab: cycle through annotations
-  if (e.key === "Tab" && !isEditingText() && hasOpenDocument) {
-    e.preventDefault();
-    const page = viewport.getCurrentPage();
-    const annots = viewport.getAnnotations(page);
-    if (annots.length === 0) return;
-    const currentId = interaction.getSelectedId();
-    const currentIdx = currentId ? annots.findIndex(a => a.id === currentId) : -1;
-    const nextIdx = e.shiftKey
-      ? (currentIdx <= 0 ? annots.length - 1 : currentIdx - 1)
-      : (currentIdx + 1) % annots.length;
-    interaction.select(annots[nextIdx].id);
-    return;
-  }
-
-  // Arrow keys: nudge selected annotation (1pt, or 10pt with Shift)
-  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key) && interaction.getSelectedId()) {
-    if (isEditingText()) return;
-    e.preventDefault();
-    const annot = interaction.getSelectedAnnotation();
-    if (!annot) return;
-
-    const step = e.shiftKey ? 10 : 1;
-    let dx = 0, dy = 0;
-    if (e.key === "ArrowLeft") dx = -step;
-    if (e.key === "ArrowRight") dx = step;
-    if (e.key === "ArrowUp") dy = -step;
-    if (e.key === "ArrowDown") dy = step;
-
-    const newRect: [number, number, number, number] = [
-      annot.rect[0] + dx, annot.rect[1] + dy,
-      annot.rect[2] + dx, annot.rect[3] + dy,
-    ];
-
-    undoManager.push({ annotId: annot.id, property: "rect", previousValue: annot.rect, newValue: newRect });
-    await rpc.send({ type: "setAnnotRect", annotId: annot.id, rect: newRect });
-    await viewport.rerenderPage(annot.page);
-    return;
-  }
-}
-
-// --- Clipboard & Duplicate ---
-
-let clipboardAnnot: import("./types").AnnotationDTO | null = null;
-
-async function duplicateSelected(): Promise<void> {
-  const annot = interaction.getSelectedAnnotation();
-  if (!annot) return;
-  const offset = 10;
-  const newRect: [number, number, number, number] = [
-    annot.rect[0] + offset, annot.rect[1] + offset,
-    annot.rect[2] + offset, annot.rect[3] + offset,
-  ];
-  const response = await rpc.send({
-    type: "createAnnot", page: annot.page, annotType: annot.type, rect: newRect,
-    properties: { ...annot, rect: newRect },
-  });
-  if (response.type === "annotCreated") {
-    undoManager.push({ annotId: response.annot.id, property: "create", previousValue: null, newValue: response.annot });
-    markDirty();
-    await viewport.rerenderPage(annot.page);
-    interaction.select(response.annot.id);
-  }
-}
-
-async function pasteAnnotation(): Promise<void> {
-  if (!clipboardAnnot) return;
-  const page = viewport.getCurrentPage();
-  const offset = 10;
-  const newRect: [number, number, number, number] = [
-    clipboardAnnot.rect[0] + offset, clipboardAnnot.rect[1] + offset,
-    clipboardAnnot.rect[2] + offset, clipboardAnnot.rect[3] + offset,
-  ];
-  const response = await rpc.send({
-    type: "createAnnot", page, annotType: clipboardAnnot.type, rect: newRect,
-    properties: { ...clipboardAnnot, rect: newRect, page },
-  });
-  if (response.type === "annotCreated") {
-    undoManager.push({ annotId: response.annot.id, property: "create", previousValue: null, newValue: response.annot });
-    markDirty();
-    await viewport.rerenderPage(page);
-    interaction.select(response.annot.id);
-  }
-}
-
-function isEditingText(): boolean {
-  const active = document.activeElement;
-  return active instanceof HTMLTextAreaElement
-    || active instanceof HTMLInputElement
-    || (active instanceof HTMLElement && active.contentEditable === "true");
-}
-
-async function insertImage(): Promise<void> {
-  if (!hasOpenDocument) return;
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = "image/png,image/jpeg,image/gif,image/webp";
-  input.onchange = async () => {
-    const file = input.files?.[0];
-    if (!file) return;
-
-    const buffer = await file.arrayBuffer();
-    const page = viewport.getCurrentPage();
-    const pageInfo = viewport.getPages()[page];
-
-    // Get natural image dimensions to preserve aspect ratio
-    const blob = new Blob([buffer.slice(0)], { type: file.type });
-    const imgUrl = URL.createObjectURL(blob);
-    const img = new Image();
-    await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = imgUrl; });
-    URL.revokeObjectURL(imgUrl);
-
-    // Fit image within max 300pt wide, preserving aspect ratio
-    const maxW = 300;
-    const maxH = 400;
-    let w = img.naturalWidth * 0.75; // pixels → approximate PDF points (96dpi → 72dpi)
-    let h = img.naturalHeight * 0.75;
-    if (w > maxW) { h *= maxW / w; w = maxW; }
-    if (h > maxH) { w *= maxH / h; h = maxH; }
-
-    const cx = pageInfo.width / 2;
-    const cy = pageInfo.height / 2;
-    const rect: [number, number, number, number] = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
-
-    console.log(`[Image] Inserting image "${file.name}" on page ${page}`);
-    const response = await rpc.send(
-      { type: "addImage", page, rect, imageData: buffer, mimeType: file.type },
-      [buffer]
-    );
-
-    if (response.type === "annotCreated") {
-      console.log(`[Image] ✓ Image added as Stamp annotation`);
-      markDirty();
-      await viewport.rerenderPage(page);
-      interaction.select(response.annot.id);
-    }
-  };
-  input.click();
-}
-
-async function saveFile(): Promise<void> {
-  if (!hasOpenDocument) return;
-  const response = await rpc.send({ type: "save", options: "incremental" });
-  if (response.type === "saved") {
-    const blob = new Blob([response.buffer], { type: "application/pdf" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = currentFilename;
-    a.click();
-    URL.revokeObjectURL(url);
-    markClean();
-  }
-}
-
-function markDirty() {
-  if (!isDirty && hasOpenDocument) {
-    isDirty = true;
-    document.title = `* ${currentFilename} — PDF Canvas`;
-  }
-}
-
-// Also mark dirty on any interaction-layer mutations (drag, etc.)
-// The undo manager onChange covers pushes from properties and main.ts,
-// but the interaction layer also pushes directly during drag/delete.
-// Those are covered since they use the same undoManager instance.
-
-function markClean() {
-  isDirty = false;
-  if (hasOpenDocument) {
-    document.title = `${currentFilename} — PDF Canvas`;
-  }
-}
-
-function findWidget(widgetId: string): import("./types").WidgetDTO | null {
-  for (const page of viewport.getPages()) {
-    const widgets = viewport.getWidgets(page.index);
-    const found = widgets.find((w) => w.id === widgetId);
-    if (found) return found;
-  }
-  return null;
-}
-
-function showWelcome(show: boolean) {
-  document.getElementById("welcome")!.style.display = show ? "flex" : "none";
-}
-
-function updatePageDisplay() {
-  const pages = viewport.getPages();
-  if (pages.length === 0) return;
-  const cur = viewport.getCurrentPage();
-  document.getElementById("page-display")!.textContent = `${cur + 1} / ${pages.length}`;
-}
-
-async function openFile(file: File) {
-  currentFilename = file.name;
-  const buffer = await file.arrayBuffer();
-  showWelcome(false);
-  try {
-    await viewport.openDocument(buffer);
-    hasOpenDocument = true;
-    undoManager.clear();
-    updatePageDisplay();
-    document.title = `${file.name} — PDF Canvas`;
-  } catch (err: any) {
-    alert(`Failed to open PDF: ${err.message}`);
-    showWelcome(true);
-  }
-}
-
-function openFilePicker() {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = ".pdf,application/pdf";
-  input.onchange = () => {
-    const file = input.files?.[0];
-    if (file) openFile(file);
-  };
-  input.click();
-}
-
-function setupDragDrop(container: HTMLElement) {
-  const root = document.documentElement;
-  root.addEventListener("dragover", (e) => { e.preventDefault(); container.classList.add("drag-over"); });
-  root.addEventListener("dragleave", (e) => { if (e.relatedTarget === null) container.classList.remove("drag-over"); });
-  root.addEventListener("drop", (e) => {
-    e.preventDefault();
-    container.classList.remove("drag-over");
-    const file = e.dataTransfer?.files[0];
-    if (file && (file.type === "application/pdf" || file.name.endsWith(".pdf"))) {
-      openFile(file);
-    }
-  });
-}
-
 // Expose for E2E testing
-(window as any).__pdfCanvas = { openFile, saveFile, markDirty, isDirty: () => isDirty };
+(window as any).__pdfCanvas = { openFile, saveFile, markDirty, isDirty: () => app.isDirty };
 
 // Register service worker for PWA support
 if ("serviceWorker" in navigator) {
