@@ -927,7 +927,7 @@ export class InteractionLayer {
       div.style.top = `${screen.y}px`;
       div.style.width = `${screen.width}px`;
       div.style.height = `${screen.height}px`;
-      if (annot.color && annot.color.length >= 3) {
+      if (annot.color && annot.color.length >= 3 && isFinite(annot.color[0])) {
         const [r, g, b] = annot.color;
         const opacity = annot.opacity ?? 1;
         div.style.borderColor = `rgba(${r * 255}, ${g * 255}, ${b * 255}, ${opacity})`;

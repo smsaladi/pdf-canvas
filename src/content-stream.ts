@@ -561,11 +561,12 @@ export function replaceHexTextInStream(
 
   if (matchStartIdx === -1) return { result: stream, count: 0, missingChars };
 
-  // Replace character by character. Only replace up to oldText.length positions.
+  // Replace character by character
   let result = stream;
-  const replaceLen = Math.min(oldText.length, newText.length);
+  let offset = 0;
   const spaceGid = unicodeToGid.get(" ");
 
+  // Phase 1: Replace existing hex operators (up to oldText.length)
   for (let i = 0; i < oldText.length; i++) {
     const op = hexOps[matchStartIdx + i];
     let newHex: string;
@@ -574,9 +575,7 @@ export function replaceHexTextInStream(
       const gid = unicodeToGid.get(newText[i]);
       if (gid !== undefined) {
         newHex = gid.toString(16).padStart(4, "0");
-      } else {
-        continue; // Can't encode this char — leave original
-      }
+      } else continue;
     } else {
       // Text is shorter: blank remaining with space
       if (spaceGid !== undefined) {
@@ -584,8 +583,42 @@ export function replaceHexTextInStream(
       } else continue;
     }
 
-    // Hex is always 4 chars, no offset shift needed
-    result = result.slice(0, op.hexStart) + newHex + result.slice(op.hexEnd);
+    result = result.slice(0, op.hexStart + offset) + newHex + result.slice(op.hexEnd + offset);
+    // No offset change since hex is always 4 chars
+  }
+
+  // Phase 2: If new text is LONGER, insert new operators after the last matched one
+  if (newText.length > oldText.length) {
+    const lastOp = hexOps[matchStartIdx + oldText.length - 1];
+    // Find the end of the last Tj operator (after "Tj")
+    const afterLastOp = stream.slice(lastOp.hexEnd);
+    const tjEnd = afterLastOp.match(/>\s*Tj/);
+    const insertPoint = lastOp.hexEnd + (tjEnd ? tjEnd.index! + tjEnd[0].length : 5);
+
+    // Calculate average character advance from nearby Td operators
+    let avgAdvance = 5; // default
+    const nearbyTds: number[] = [];
+    for (let i = Math.max(0, matchStartIdx - 3); i < Math.min(hexOps.length, matchStartIdx + oldText.length + 3); i++) {
+      const before = stream.slice(Math.max(0, hexOps[i].hexStart - 30), hexOps[i].hexStart);
+      const tdMatch = before.match(/([\d.]+)\s+0\s+Td\s*$/);
+      if (tdMatch) nearbyTds.push(parseFloat(tdMatch[1]));
+    }
+    if (nearbyTds.length > 0) avgAdvance = Math.round(nearbyTds.reduce((a, b) => a + b, 0) / nearbyTds.length);
+
+    // Build the extra operators
+    let extra = "";
+    for (let i = oldText.length; i < newText.length; i++) {
+      const gid = unicodeToGid.get(newText[i]);
+      if (gid !== undefined) {
+        const hex = gid.toString(16).padStart(4, "0");
+        extra += `\n${avgAdvance} 0 Td <${hex}> Tj`;
+      }
+    }
+
+    if (extra) {
+      result = result.slice(0, insertPoint + offset) + extra + result.slice(insertPoint + offset);
+      offset += extra.length;
+    }
   }
 
   return { result, count: 1, missingChars };
