@@ -8,6 +8,7 @@ import {
   replaceTextInStream,
   replaceTextWithFontSwitch,
   getAllText,
+  parseToUnicodeCMap,
 } from "./content-stream";
 
 describe("decodeLiteralString", () => {
@@ -298,5 +299,155 @@ describe("replaceTextWithFontSwitch", () => {
     // Should fall back to default TT0 and size 12
     expect(result).toContain("/NewFont 12 Tf");
     expect(result).toContain("/TT0 12 Tf");
+  });
+});
+
+describe("parseToUnicodeCMap", () => {
+  const realCMap = `/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def
+/CMapType 2 def
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+2 beginbfchar
+<0003> <0020>
+<0044> <0061>
+endbfchar
+3 beginbfrange
+<000B> <000C> <0028>
+<000F> <001C> <002C>
+<0046> <004C> <0063>
+endbfrange
+endcmap`;
+
+  it("parses bfchar entries: GID 0x0003 maps to space (U+0020)", () => {
+    const { gidToUnicode } = parseToUnicodeCMap(realCMap);
+    expect(gidToUnicode.get(0x0003)).toBe(" ");
+  });
+
+  it("parses bfchar entries: GID 0x0044 maps to 'a' (U+0061)", () => {
+    const { gidToUnicode } = parseToUnicodeCMap(realCMap);
+    expect(gidToUnicode.get(0x0044)).toBe("a");
+  });
+
+  it("parses bfrange: GID 0x000B maps to '(' (U+0028)", () => {
+    const { gidToUnicode } = parseToUnicodeCMap(realCMap);
+    expect(gidToUnicode.get(0x000B)).toBe("(");
+  });
+
+  it("parses bfrange: GID 0x000C maps to ')' (U+0029)", () => {
+    const { gidToUnicode } = parseToUnicodeCMap(realCMap);
+    expect(gidToUnicode.get(0x000C)).toBe(")");
+  });
+
+  it("parses bfrange: GID 0x000F maps to ',' (U+002C)", () => {
+    const { gidToUnicode } = parseToUnicodeCMap(realCMap);
+    expect(gidToUnicode.get(0x000F)).toBe(",");
+  });
+
+  it("parses bfrange span: GID 0x000F through 0x001C covers 14 characters", () => {
+    const { gidToUnicode } = parseToUnicodeCMap(realCMap);
+    // Range 0x000F-0x001C starting at U+002C (',')
+    for (let gid = 0x000F; gid <= 0x001C; gid++) {
+      const expectedChar = String.fromCharCode(0x002C + (gid - 0x000F));
+      expect(gidToUnicode.get(gid)).toBe(expectedChar);
+    }
+  });
+
+  it("parses bfrange: GID 0x0046-0x004C maps to 'c' through 'i'", () => {
+    const { gidToUnicode } = parseToUnicodeCMap(realCMap);
+    expect(gidToUnicode.get(0x0046)).toBe("c");
+    expect(gidToUnicode.get(0x0047)).toBe("d");
+    expect(gidToUnicode.get(0x004C)).toBe("i");
+  });
+
+  it("builds reverse unicodeToGid map: 'a' maps to GID 0x0044", () => {
+    const { unicodeToGid } = parseToUnicodeCMap(realCMap);
+    expect(unicodeToGid.get("a")).toBe(0x0044);
+  });
+
+  it("builds reverse unicodeToGid map: space maps to GID 0x0003", () => {
+    const { unicodeToGid } = parseToUnicodeCMap(realCMap);
+    expect(unicodeToGid.get(" ")).toBe(0x0003);
+  });
+
+  it("builds reverse unicodeToGid map: '(' maps to GID 0x000B", () => {
+    const { unicodeToGid } = parseToUnicodeCMap(realCMap);
+    expect(unicodeToGid.get("(")).toBe(0x000B);
+  });
+
+  it("returns empty maps for empty CMap data", () => {
+    const { gidToUnicode, unicodeToGid } = parseToUnicodeCMap("");
+    expect(gidToUnicode.size).toBe(0);
+    expect(unicodeToGid.size).toBe(0);
+  });
+
+  it("returns empty maps for CMap with no bfchar or bfrange", () => {
+    const minimal = `begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+endcmap`;
+    const { gidToUnicode, unicodeToGid } = parseToUnicodeCMap(minimal);
+    expect(gidToUnicode.size).toBe(0);
+    expect(unicodeToGid.size).toBe(0);
+  });
+
+  it("total mapped GIDs: 2 bfchar + (2 + 14 + 7) bfrange = 25", () => {
+    const { gidToUnicode } = parseToUnicodeCMap(realCMap);
+    // bfchar: 2 entries
+    // bfrange 1: 0x000B-0x000C = 2 entries
+    // bfrange 2: 0x000F-0x001C = 14 entries
+    // bfrange 3: 0x0046-0x004C = 7 entries
+    expect(gidToUnicode.size).toBe(2 + 2 + 14 + 7);
+  });
+});
+
+describe("getAllText (complex streams)", () => {
+  it("concatenates text from mixed Tj and TJ operators", () => {
+    const stream = `BT
+/F1 12 Tf
+72 720 Td
+(Hello ) Tj
+[(W) -20 (or) 15 (ld)] TJ
+ET`;
+    expect(getAllText(stream)).toBe("Hello World");
+  });
+
+  it("handles multiple BT/ET blocks", () => {
+    const stream = `BT (First block) Tj ET
+BT (Second block) Tj ET`;
+    expect(getAllText(stream)).toBe("First blockSecond block");
+  });
+
+  it("handles stream with only TJ arrays", () => {
+    const stream = "BT [(In) -5 (vo) 10 (ice)] TJ [( #) -3 (123)] TJ ET";
+    expect(getAllText(stream)).toBe("Invoice #123");
+  });
+
+  it("handles stream with ' operator mixed with Tj", () => {
+    const stream = "BT (Line one) Tj (Line two) ' ET";
+    expect(getAllText(stream)).toBe("Line oneLine two");
+  });
+
+  it("returns empty string for stream with no text operators", () => {
+    const stream = "BT /F1 12 Tf 72 700 Td ET";
+    expect(getAllText(stream)).toBe("");
+  });
+
+  it("handles complex multi-line stream with Tj, TJ, and positioning", () => {
+    const stream = `BT
+/F1 10 Tf
+72 750 Td
+(Dear ) Tj
+[(Cu) -15 (st) 10 (om) -5 (er)] TJ
+(,) Tj
+0 -20 Td
+(Your order ) Tj
+[(#) 5 (4567)] TJ
+( is confirmed.) Tj
+ET`;
+    expect(getAllText(stream)).toBe("Dear Customer,Your order #4567 is confirmed.");
   });
 });

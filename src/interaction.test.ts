@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { pdfRectToScreenRect } from "./coords";
+import {
+  ICON_TYPES,
+  QUADPOINT_TYPES,
+  TOOL_TO_ANNOT_TYPE,
+  HANDLE_SIZE,
+  NOTE_ICON_SIZE,
+} from "./interaction/constants";
 
 describe("Overlay positioning", () => {
   it("positions overlay correctly at scale=1 with no offset", () => {
@@ -57,5 +64,137 @@ describe("Overlay positioning", () => {
     // But icon size is fixed 24px, not scaled from rect
     const iconSize = 24;
     expect(iconSize).toBe(24);
+  });
+});
+
+describe("Interaction constants", () => {
+  describe("ICON_TYPES", () => {
+    it("is a Set", () => {
+      expect(ICON_TYPES).toBeInstanceOf(Set);
+    });
+
+    it("contains 'Text' (sticky note annotations)", () => {
+      expect(ICON_TYPES.has("Text")).toBe(true);
+    });
+
+    it("does not contain non-icon types", () => {
+      expect(ICON_TYPES.has("FreeText")).toBe(false);
+      expect(ICON_TYPES.has("Square")).toBe(false);
+      expect(ICON_TYPES.has("Highlight")).toBe(false);
+    });
+  });
+
+  describe("QUADPOINT_TYPES", () => {
+    it("is a Set", () => {
+      expect(QUADPOINT_TYPES).toBeInstanceOf(Set);
+    });
+
+    it("contains all four text markup annotation types", () => {
+      expect(QUADPOINT_TYPES.has("Highlight")).toBe(true);
+      expect(QUADPOINT_TYPES.has("Underline")).toBe(true);
+      expect(QUADPOINT_TYPES.has("StrikeOut")).toBe(true);
+      expect(QUADPOINT_TYPES.has("Squiggly")).toBe(true);
+    });
+
+    it("has exactly 4 entries", () => {
+      expect(QUADPOINT_TYPES.size).toBe(4);
+    });
+
+    it("does not contain non-quadpoint types", () => {
+      expect(QUADPOINT_TYPES.has("Text")).toBe(false);
+      expect(QUADPOINT_TYPES.has("FreeText")).toBe(false);
+      expect(QUADPOINT_TYPES.has("Square")).toBe(false);
+      expect(QUADPOINT_TYPES.has("Ink")).toBe(false);
+    });
+  });
+
+  describe("TOOL_TO_ANNOT_TYPE", () => {
+    it("maps 'note' to 'Text'", () => {
+      expect(TOOL_TO_ANNOT_TYPE["note"]).toBe("Text");
+    });
+
+    it("maps 'freetext' to 'FreeText'", () => {
+      expect(TOOL_TO_ANNOT_TYPE["freetext"]).toBe("FreeText");
+    });
+
+    it("maps 'highlight' to 'Highlight'", () => {
+      expect(TOOL_TO_ANNOT_TYPE["highlight"]).toBe("Highlight");
+    });
+
+    it("maps 'rectangle' to 'Square'", () => {
+      expect(TOOL_TO_ANNOT_TYPE["rectangle"]).toBe("Square");
+    });
+
+    it("maps 'circle' to 'Circle'", () => {
+      expect(TOOL_TO_ANNOT_TYPE["circle"]).toBe("Circle");
+    });
+
+    it("maps 'line' to 'Line'", () => {
+      expect(TOOL_TO_ANNOT_TYPE["line"]).toBe("Line");
+    });
+
+    it("maps 'ink' to 'Ink'", () => {
+      expect(TOOL_TO_ANNOT_TYPE["ink"]).toBe("Ink");
+    });
+
+    it("has all expected tool keys", () => {
+      const expectedKeys = ["note", "freetext", "highlight", "rectangle", "circle", "line", "ink"];
+      expect(Object.keys(TOOL_TO_ANNOT_TYPE).sort()).toEqual(expectedKeys.sort());
+    });
+
+    it("all mapped annotation types are valid MuPDF annotation type strings", () => {
+      const validMuPDFTypes = new Set([
+        "Text", "FreeText", "Highlight", "Underline", "StrikeOut", "Squiggly",
+        "Square", "Circle", "Line", "Ink", "Stamp", "Caret", "FileAttachment",
+        "Sound", "Movie", "RichMedia", "Widget", "Screen", "Popup",
+      ]);
+      for (const annotType of Object.values(TOOL_TO_ANNOT_TYPE)) {
+        expect(validMuPDFTypes.has(annotType)).toBe(true);
+      }
+    });
+  });
+
+  describe("HANDLE_SIZE", () => {
+    it("is a positive number", () => {
+      expect(HANDLE_SIZE).toBeGreaterThan(0);
+    });
+
+    it("equals 8", () => {
+      expect(HANDLE_SIZE).toBe(8);
+    });
+  });
+
+  describe("NOTE_ICON_SIZE", () => {
+    it("is a positive number", () => {
+      expect(NOTE_ICON_SIZE).toBeGreaterThan(0);
+    });
+
+    it("equals 24", () => {
+      expect(NOTE_ICON_SIZE).toBe(24);
+    });
+  });
+
+  describe("ICON_TYPES and QUADPOINT_TYPES are disjoint", () => {
+    it("no type appears in both sets", () => {
+      for (const t of ICON_TYPES) {
+        expect(QUADPOINT_TYPES.has(t)).toBe(false);
+      }
+    });
+  });
+
+  describe("TOOL_TO_ANNOT_TYPE consistency with type sets", () => {
+    it("'note' tool maps to an ICON_TYPE", () => {
+      expect(ICON_TYPES.has(TOOL_TO_ANNOT_TYPE["note"])).toBe(true);
+    });
+
+    it("'highlight' tool maps to a QUADPOINT_TYPE", () => {
+      expect(QUADPOINT_TYPES.has(TOOL_TO_ANNOT_TYPE["highlight"])).toBe(true);
+    });
+
+    it("'rectangle' tool maps to neither ICON nor QUADPOINT type", () => {
+      const type = TOOL_TO_ANNOT_TYPE["rectangle"];
+      expect(ICON_TYPES.has(type)).toBe(false);
+      expect(QUADPOINT_TYPES.has(type)).toBe(false);
+    });
   });
 });
