@@ -185,7 +185,9 @@ export function augmentFont(
 ): ArrayBuffer | null {
   try {
     // Parse the subset font with fonteditor-core (preserves TrueType format)
-    const subsetFont = FEFont.create(new Uint8Array(subsetBuffer) as any, { type: "ttf" });
+    // fonteditor-core needs a real ArrayBuffer, not a view or SharedArrayBuffer
+    const cleanBuffer = subsetBuffer instanceof ArrayBuffer ? subsetBuffer : new Uint8Array(subsetBuffer).buffer;
+    const subsetFont = FEFont.create(cleanBuffer as any, { type: "ttf" });
     const subsetData = subsetFont.get();
 
     if (!subsetData || !subsetData.glyf) {
