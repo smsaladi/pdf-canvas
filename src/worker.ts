@@ -374,14 +374,25 @@ self.onmessage = async function (e: MessageEvent) {
                             console.log(`[ContentMap] Calibrated advanceScale=${advanceScale.toFixed(2)} from ${ratios.length} samples`);
                           }
 
-                          // Generate appended operators with calibrated advances
+                          // Generate appended operators with calibrated advances.
+                          // KEY: Td moves the cursor BEFORE drawing. So:
+                          //   Td_N = advance width of the CHARACTER BEFORE character N
+                          // The first Td = advance of the last original char (the one before our appended text)
+                          const lastOrigGid = selection[selection.length - 1].glyphId;
+                          let prevCharAdvance = Math.round(fontForMetrics.advanceGlyph(lastOrigGid) * advanceScale * 10) / 10;
+                          let skippedAdvance = 0; // accumulate advances of skipped chars
+
                           for (const ch of extraChars) {
                             const gid = unicodeToGid.get(ch);
                             if (gid !== undefined) {
-                              const fontAdv = fontForMetrics.advanceGlyph(gid);
-                              const advance = Math.round(fontAdv * advanceScale * 10) / 10;
-                              extra += `\n${advance} 0 Td <${gid.toString(16).padStart(4, "0")}> Tj`;
+                              const td = Math.round((prevCharAdvance + skippedAdvance) * 10) / 10;
+                              extra += `\n${td} 0 Td <${gid.toString(16).padStart(4, "0")}> Tj`;
+                              prevCharAdvance = Math.round(fontForMetrics.advanceGlyph(gid) * advanceScale * 10) / 10;
+                              skippedAdvance = 0;
                             } else {
+                              // Can't encode this char — accumulate its approximate width
+                              // for the next character's Td so spacing stays correct
+                              skippedAdvance += Math.round(advanceScale * 0.5 * 10) / 10; // ~half em for unknown chars
                               console.log(`[ContentMap] Can't encode "${ch}" (U+${ch.charCodeAt(0).toString(16)}) — not in CMap`);
                             }
                           }
