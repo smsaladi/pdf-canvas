@@ -927,10 +927,11 @@ export class InteractionLayer {
       div.style.top = `${screen.y}px`;
       div.style.width = `${screen.width}px`;
       div.style.height = `${screen.height}px`;
+      // Store color as data attribute for selected state; don't set inline borderColor
+      // (the annotation's visual appearance is rendered by MuPDF in the page bitmap)
       if (annot.color && annot.color.length >= 3 && isFinite(annot.color[0])) {
         const [r, g, b] = annot.color;
-        const opacity = annot.opacity ?? 1;
-        div.style.borderColor = `rgba(${r * 255}, ${g * 255}, ${b * 255}, ${opacity})`;
+        div.dataset.borderColor = `rgba(${r * 255}, ${g * 255}, ${b * 255}, 1)`;
       }
     }
 

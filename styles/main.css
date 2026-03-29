@@ -236,7 +236,7 @@ body {
   box-shadow: none;
 }
 
-/* Geometric annotation overlays — show border */
+/* Geometric annotation overlays — transparent border for hit-testing */
 
 .annot-type-freetext,
 .annot-type-square,
@@ -246,8 +246,7 @@ body {
 .annot-type-polygon,
 .annot-type-polyline,
 .annot-type-stamp {
-  border-width: 2px;
-  border-style: dashed;
+  border: 2px solid transparent;
   background: rgba(255, 255, 255, 0.02);
 }
 

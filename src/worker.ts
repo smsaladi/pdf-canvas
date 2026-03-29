@@ -126,7 +126,6 @@ self.onmessage = async function (e: MessageEvent) {
           if (props.icon && annot.hasIcon()) annot.setIcon(props.icon);
           if (props.borderWidth !== undefined && annot.hasBorder()) annot.setBorderWidth(props.borderWidth);
           if (props.borderStyle && annot.hasBorder()) annot.setBorderStyle(props.borderStyle as mupdf.PDFAnnotationBorderStyle);
-          else if (annot.hasBorder()) annot.setBorderStyle("Solid"); // default to Solid, not Dashed
           if (props.interiorColor && annot.hasInteriorColor()) annot.setInteriorColor(props.interiorColor as mupdf.AnnotColor);
           if (props.quadPoints) { try { annot.setQuadPoints(props.quadPoints as mupdf.Quad[]); } catch {} }
           if (props.defaultAppearance && request.annotType === "FreeText") {
