@@ -341,6 +341,9 @@ async function applyPropertyChange(annotId: string, property: string, value: any
     case "borderWidth":
       await rpc.send({ type: "setAnnotBorderWidth", annotId, width: value });
       break;
+    case "borderStyle":
+      await rpc.send({ type: "setAnnotBorderStyle", annotId, style: value });
+      break;
     case "interiorColor":
       await rpc.send({ type: "setAnnotInteriorColor", annotId, color: value });
       break;
@@ -374,6 +377,9 @@ async function applyUndo(entry: { annotId: string; property: string; previousVal
       break;
     case "borderWidth":
       await rpc.send({ type: "setAnnotBorderWidth", annotId: entry.annotId, width: value });
+      break;
+    case "borderStyle":
+      await rpc.send({ type: "setAnnotBorderStyle", annotId: entry.annotId, style: value });
       break;
     case "interiorColor":
       await rpc.send({ type: "setAnnotInteriorColor", annotId: entry.annotId, color: value });

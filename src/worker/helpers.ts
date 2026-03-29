@@ -58,6 +58,7 @@ export function getAnnotations(pageIndex: number): AnnotationDTO[] {
         opacity: a.getOpacity(),
         contents: a.getContents(),
         borderWidth: a.hasBorder() ? a.getBorderWidth() : 0,
+        borderStyle: a.hasBorder() ? a.getBorderStyle() : undefined,
         hasRect: a.hasRect(),
       };
 

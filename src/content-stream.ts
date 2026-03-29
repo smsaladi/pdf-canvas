@@ -527,7 +527,7 @@ export function replaceHexTextInStream(
 ): { result: string; count: number; missingChars: string[] } {
   // Find all hex Tj operators and their positions
   const hexPattern = /<([0-9A-Fa-f]{4})>\s*Tj/g;
-  const hexOps: Array<{ gid: number; char: string; start: number; end: number; hexStart: number; hexEnd: number }> = [];
+  const hexOps: Array<{ gid: number; char: string; hexStart: number; hexEnd: number }> = [];
   let m;
 
   while ((m = hexPattern.exec(stream)) !== null) {
@@ -535,70 +535,57 @@ export function replaceHexTextInStream(
     const ch = gidToUnicode.get(gid) || "";
     hexOps.push({
       gid, char: ch,
-      start: m.index, end: m.index + m[0].length,
       hexStart: m.index + 1, // position of first hex digit (after <)
-      hexEnd: m.index + 5, // position after last hex digit (before >)
+      hexEnd: m.index + 5,   // position after last hex digit (before >)
     });
   }
 
   if (hexOps.length === 0) return { result: stream, count: 0, missingChars: [] };
 
-  // Build the decoded text from all hex operators
-  const decodedText = hexOps.map(op => op.char).join("");
-
-  // Find the old text in the decoded sequence
-  const idx = decodedText.indexOf(oldText);
-  if (idx === -1) return { result: stream, count: 0, missingChars: [] };
-
   // Check which replacement characters can be encoded
   const missingChars: string[] = [];
-  for (const ch of newText) {
-    if (!unicodeToGid.has(ch) && ch !== " ") { // space might use a special GID
-      missingChars.push(ch);
-    }
+  for (const ch of new Set(newText)) {
+    if (!unicodeToGid.has(ch)) missingChars.push(ch);
   }
 
-  // Even with missing chars, replace what we can (missing chars will need font augmentation)
-  // For now, skip characters we can't encode
-  const encodableNewText = [...newText].filter(ch => unicodeToGid.has(ch) || ch === oldText[0]).join(""); // fallback
+  // Find the old text as a VERIFIED consecutive sequence of hex operators.
+  // Each hex operator must decode to the expected character.
+  let matchStartIdx = -1;
+  for (let startI = 0; startI <= hexOps.length - oldText.length; startI++) {
+    let matched = true;
+    for (let j = 0; j < oldText.length; j++) {
+      if (hexOps[startI + j].char !== oldText[j]) { matched = false; break; }
+    }
+    if (matched) { matchStartIdx = startI; break; }
+  }
 
-  // The replacement needs to handle the case where newText length ≠ oldText length
-  // Strategy: replace the hex values for the characters we're changing,
-  // and if the new text is shorter, blank out extra operators;
-  // if longer, we can't easily add new operators (would need to restructure)
+  if (matchStartIdx === -1) return { result: stream, count: 0, missingChars };
 
-  // For same-length or shorter: swap hex values in place
+  // Replace character by character. Only replace up to oldText.length positions.
   let result = stream;
-  let offset = 0;
-
-  // Replace each character in the matched range
-  const matchStart = idx;
-  const matchEnd = idx + oldText.length;
-
-  for (let i = matchStart; i < Math.min(matchEnd, matchStart + newText.length); i++) {
-    const op = hexOps[i];
-    const newChar = newText[i - matchStart];
-    const newGid = unicodeToGid.get(newChar);
-
-    if (newGid !== undefined) {
-      const newHex = newGid.toString(16).padStart(4, "0");
-      const adjStart = op.hexStart + offset;
-      const adjEnd = op.hexEnd + offset;
-      result = result.slice(0, adjStart) + newHex + result.slice(adjEnd);
-      // No offset change since hex is same length (4 chars)
-    }
-  }
-
-  // If new text is shorter, blank out remaining operators (set to space GID)
+  const replaceLen = Math.min(oldText.length, newText.length);
   const spaceGid = unicodeToGid.get(" ");
-  if (newText.length < oldText.length && spaceGid !== undefined) {
-    for (let i = matchStart + newText.length; i < matchEnd; i++) {
-      const op = hexOps[i];
-      const newHex = spaceGid.toString(16).padStart(4, "0");
-      const adjStart = op.hexStart + offset;
-      const adjEnd = op.hexEnd + offset;
-      result = result.slice(0, adjStart) + newHex + result.slice(adjEnd);
+
+  for (let i = 0; i < oldText.length; i++) {
+    const op = hexOps[matchStartIdx + i];
+    let newHex: string;
+
+    if (i < newText.length) {
+      const gid = unicodeToGid.get(newText[i]);
+      if (gid !== undefined) {
+        newHex = gid.toString(16).padStart(4, "0");
+      } else {
+        continue; // Can't encode this char — leave original
+      }
+    } else {
+      // Text is shorter: blank remaining with space
+      if (spaceGid !== undefined) {
+        newHex = spaceGid.toString(16).padStart(4, "0");
+      } else continue;
     }
+
+    // Hex is always 4 chars, no offset shift needed
+    result = result.slice(0, op.hexStart) + newHex + result.slice(op.hexEnd);
   }
 
   return { result, count: 1, missingChars };

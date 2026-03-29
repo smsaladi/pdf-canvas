@@ -100,17 +100,23 @@ export class PropertiesPanel {
     // Fill color (interior color — Square, Circle, Line, FreeText)
     const fillTypes = new Set(["Square", "Circle", "Line", "FreeText"]);
     if (fillTypes.has(annot.type)) {
-      const fillHex = annot.interiorColor
+      const fillHex = annot.interiorColor && annot.interiorColor.length >= 3
         ? rgbToHex(annot.interiorColor[0], annot.interiorColor[1], annot.interiorColor[2])
         : "#ffffff";
       html += `<div class="props-section"><label class="props-label">Fill</label>`;
       html += `<div class="props-row"><input type="color" class="props-color" data-prop="interiorColor" value="${fillHex}" /></div></div>`;
     }
 
-    // Border width
+    // Border width + style
     if (annot.borderWidth !== undefined && !isIconType(annot.type) && !isQuadPointType(annot.type)) {
       html += `<div class="props-section"><label class="props-label">Border</label>`;
-      html += `<input type="number" class="props-input" data-prop="borderWidth" min="0" max="20" step="0.5" value="${annot.borderWidth}" /></div>`;
+      html += `<input type="number" class="props-input" data-prop="borderWidth" min="0" max="20" step="0.5" value="${annot.borderWidth}" />`;
+      const curStyle = annot.borderStyle || "Solid";
+      html += `<select class="props-select" data-prop="borderStyle" style="margin-top:4px">`;
+      for (const s of ["Solid", "Dashed", "Beveled", "Inset", "Underline"]) {
+        html += `<option value="${s}"${s === curStyle ? " selected" : ""}>${s}</option>`;
+      }
+      html += `</select></div>`;
     }
 
     // Icon (Text annotations)
@@ -207,6 +213,11 @@ export class PropertiesPanel {
     this.container.querySelector<HTMLInputElement>('[data-prop="borderWidth"]')?.addEventListener("change", (e) => {
       const val = parseFloat((e.target as HTMLInputElement).value);
       this.emitChange("borderWidth", val, this.annotation?.borderWidth);
+    });
+
+    // Border style
+    this.container.querySelector<HTMLSelectElement>('[data-prop="borderStyle"]')?.addEventListener("change", (e) => {
+      this.emitChange("borderStyle", (e.target as HTMLSelectElement).value, this.annotation?.borderStyle);
     });
 
     // Font family (FreeText)
