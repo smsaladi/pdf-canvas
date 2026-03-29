@@ -122,10 +122,25 @@ export class PropertiesPanel {
       html += `</select></div>`;
     }
 
-    // Font size (FreeText)
+    // Font controls (FreeText)
     if (annot.type === "FreeText" && annot.defaultAppearance) {
-      html += `<div class="props-section"><label class="props-label">Font Size</label>`;
+      const currentFont = annot.defaultAppearance.font || "Helv";
+      html += `<div class="props-section"><label class="props-label">Font</label>`;
+      html += `<select class="props-select" data-prop="fontFamily">`;
+      const fonts: [string, string][] = [["Helv", "Sans Serif"], ["TiRo", "Serif"], ["Cour", "Monospace"]];
+      for (const [val, label] of fonts) {
+        html += `<option value="${val}"${val === currentFont ? " selected" : ""}>${label}</option>`;
+      }
+      html += `</select></div>`;
+
+      html += `<div class="props-section"><label class="props-label">Size</label>`;
       html += `<input type="number" class="props-input" data-prop="fontSize" min="4" max="144" value="${annot.defaultAppearance.size}" /></div>`;
+
+      const textColorHex = annot.defaultAppearance.color
+        ? rgbToHex(annot.defaultAppearance.color[0], annot.defaultAppearance.color[1], annot.defaultAppearance.color[2])
+        : "#000000";
+      html += `<div class="props-section"><label class="props-label">Text Color</label>`;
+      html += `<div class="props-row"><input type="color" class="props-color" data-prop="textColor" value="${textColorHex}" /></div></div>`;
     }
 
     // Comment text
@@ -192,6 +207,34 @@ export class PropertiesPanel {
     this.container.querySelector<HTMLInputElement>('[data-prop="borderWidth"]')?.addEventListener("change", (e) => {
       const val = parseFloat((e.target as HTMLInputElement).value);
       this.emitChange("borderWidth", val, this.annotation?.borderWidth);
+    });
+
+    // Font family (FreeText)
+    this.container.querySelector<HTMLSelectElement>('[data-prop="fontFamily"]')?.addEventListener("change", (e) => {
+      const font = (e.target as HTMLSelectElement).value;
+      const da = this.annotation?.defaultAppearance;
+      if (da) {
+        this.emitChange("defaultAppearance", { font, size: da.size, color: da.color }, da);
+      }
+    });
+
+    // Font size (FreeText)
+    this.container.querySelector<HTMLInputElement>('[data-prop="fontSize"]')?.addEventListener("change", (e) => {
+      const size = parseFloat((e.target as HTMLInputElement).value);
+      const da = this.annotation?.defaultAppearance;
+      if (da) {
+        this.emitChange("defaultAppearance", { font: da.font, size, color: da.color }, da);
+      }
+    });
+
+    // Text color (FreeText)
+    this.container.querySelector<HTMLInputElement>('[data-prop="textColor"]')?.addEventListener("change", (e) => {
+      const hex = (e.target as HTMLInputElement).value;
+      const rgb = hexToRgb(hex);
+      const da = this.annotation?.defaultAppearance;
+      if (da) {
+        this.emitChange("defaultAppearance", { font: da.font, size: da.size, color: rgb }, da);
+      }
     });
 
     // Icon

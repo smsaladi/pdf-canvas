@@ -603,7 +603,8 @@ export class InteractionLayer {
     // Set sensible defaults per type
     switch (tool) {
       case "freetext":
-        properties.color = this.currentColor;
+        properties.color = [0, 0, 0]; // text color
+        properties.borderWidth = 0; // no border by default
         properties.defaultAppearance = { font: "Helv", size: 14, color: [0, 0, 0] };
         properties.contents = "";
         break;

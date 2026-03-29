@@ -155,10 +155,16 @@ export function matchReferenceFont(
 // Maps Google Font family + style to bundled TTF file path
 export function getLocalFontPath(match: FontMatchResult): string {
   const base = match.googleFamily;
-  const variant = match.bold ? "Bold" : "Regular";
+  let variant: string;
+  if (match.bold && match.italic) variant = "BoldItalic";
+  else if (match.bold) variant = "Bold";
+  else if (match.italic) variant = "Italic";
+  else variant = "Regular";
+
+  // We have full variants for Arimo; Tinos/Cousine only Regular+Bold
   if (base === "Arimo") return `/fonts/Arimo-${variant}.ttf`;
-  if (base === "Tinos") return `/fonts/Tinos-${variant}.ttf`;
-  if (base === "Cousine") return `/fonts/Cousine-${variant}.ttf`;
+  if (base === "Tinos") return `/fonts/Tinos-${match.bold ? "Bold" : "Regular"}.ttf`;
+  if (base === "Cousine") return `/fonts/Cousine-${match.bold ? "Bold" : "Regular"}.ttf`;
   return `/fonts/Arimo-${variant}.ttf`;
 }
 

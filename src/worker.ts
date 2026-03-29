@@ -263,6 +263,14 @@ self.onmessage = async function (e: MessageEvent) {
         break;
       }
 
+      case "setAnnotDefaultAppearance": {
+        const { annot } = resolveAnnot(request.annotId);
+        annot.setDefaultAppearance(request.font, request.size, request.color as mupdf.AnnotColor);
+        annot.update();
+        respond(_rpcId, { type: "annotUpdated", annotId: request.annotId });
+        break;
+      }
+
       case "setAnnotIcon": {
         const { annot } = resolveAnnot(request.annotId);
         annot.setIcon(request.icon);

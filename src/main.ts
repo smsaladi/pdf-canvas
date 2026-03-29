@@ -344,6 +344,9 @@ async function applyPropertyChange(annotId: string, property: string, value: any
     case "interiorColor":
       await rpc.send({ type: "setAnnotInteriorColor", annotId, color: value });
       break;
+    case "defaultAppearance":
+      await rpc.send({ type: "setAnnotDefaultAppearance", annotId, font: value.font, size: value.size, color: value.color });
+      break;
   }
 }
 
@@ -374,6 +377,9 @@ async function applyUndo(entry: { annotId: string; property: string; previousVal
       break;
     case "interiorColor":
       await rpc.send({ type: "setAnnotInteriorColor", annotId: entry.annotId, color: value });
+      break;
+    case "defaultAppearance":
+      await rpc.send({ type: "setAnnotDefaultAppearance", annotId: entry.annotId, font: value.font, size: value.size, color: value.color });
       break;
     case "delete": {
       // Undo delete = recreate annotation from saved DTO
