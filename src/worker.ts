@@ -486,11 +486,9 @@ self.onmessage = async function (e: MessageEvent) {
       case "replaceTextSmart": {
         const page = doc!.loadPage(request.page) as mupdf.PDFPage;
         const pageObj = page.getObject();
-
-        // --- Tier 0: Try simple content stream replacement ---
         const contentsRef = pageObj.get("Contents");
-        let tier0Count = 0;
 
+        // Helper: replace text in a content stream
         const tryStreamReplace = (streamRef: any): boolean => {
           if (!streamRef.isStream()) return false;
           const streamData = streamRef.readStream().asString();
@@ -502,112 +500,124 @@ self.onmessage = async function (e: MessageEvent) {
           return false;
         };
 
-        if (contentsRef.isArray()) {
-          for (let i = 0; i < contentsRef.length; i++) {
-            if (tryStreamReplace(contentsRef.get(i))) { tier0Count++; break; }
+        const doStreamReplace = (): boolean => {
+          if (contentsRef.isArray()) {
+            for (let i = 0; i < contentsRef.length; i++) {
+              if (tryStreamReplace(contentsRef.get(i))) return true;
+            }
+          } else if (contentsRef.isStream()) {
+            if (tryStreamReplace(contentsRef)) return true;
           }
-        } else if (contentsRef.isStream()) {
-          if (tryStreamReplace(contentsRef)) tier0Count++;
-        }
+          return false;
+        };
 
-        if (tier0Count > 0) {
-          respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: tier0Count, method: "content-stream" });
-          break;
-        }
+        // --- Step 1: Check if new text has characters missing from page fonts ---
+        // Determine which characters are NEW (in newText but not in oldText)
+        const oldChars = new Set([...request.oldText]);
+        const newChars = [...new Set(request.newText)].filter(c => !oldChars.has(c));
+        let needsAugmentation = false;
+        let augmentedAnyFont = false;
 
-        // --- Tier 1: Font augmentation ---
-        // Find the font used for this text by checking page font resources
-        let tier1Success = false;
-        try {
-          const resources = pageObj.get("Resources");
-          const fontDict = resources.isNull() ? null : resources.get("Font");
+        if (newChars.length > 0) {
+          // Check each page font for missing glyphs
+          try {
+            const resources = pageObj.get("Resources");
+            const fontDict = (!resources.isNull()) ? resources.get("Font") : null;
 
-          if (fontDict && !fontDict.isNull()) {
-            // Try each font on the page
-            fontDict.forEach((fontObj: mupdf.PDFObject, fontKey: string | number) => {
-              if (tier1Success) return;
-              try {
-                const subtype = fontObj.get("Subtype").asName();
-                const baseFontName = fontObj.get("BaseFont").asName();
-                const encoding = fontObj.get("Encoding");
-                const encodingName = encoding.isName() ? encoding.asName() : "";
+            if (fontDict && !fontDict.isNull()) {
+              // Collect font keys first (forEach doesn't support async)
+              const fontKeys: string[] = [];
+              fontDict.forEach((_: any, key: string | number) => { fontKeys.push(String(key)); });
 
-                // Only augment TrueType fonts with standard encodings
-                if (subtype !== "TrueType") return;
-                if (encodingName !== "WinAnsiEncoding" && encodingName !== "MacRomanEncoding") return;
+              for (const fontKey of fontKeys) {
+                try {
+                  const fontObj = fontDict.get(fontKey);
+                  const subtype = fontObj.get("Subtype").asName();
+                  if (subtype !== "TrueType") continue;
 
-                const descriptor = fontObj.get("FontDescriptor");
-                if (descriptor.isNull()) return;
+                  const encoding = fontObj.get("Encoding");
+                  const encodingName = encoding.isName() ? encoding.asName() : "";
+                  if (encodingName !== "WinAnsiEncoding" && encodingName !== "MacRomanEncoding") continue;
 
-                const fontFile2 = descriptor.get("FontFile2");
-                if (!fontFile2.isStream()) return;
+                  const descriptor = fontObj.get("FontDescriptor");
+                  if (descriptor.isNull()) continue;
 
-                // Extract the subsetted font binary
-                const subsetBuf = fontFile2.readStream();
-                const subsetArray = subsetBuf.asUint8Array();
-                const subsetBuffer = new ArrayBuffer(subsetArray.byteLength);
-                new Uint8Array(subsetBuffer).set(subsetArray);
+                  const fontFile2 = descriptor.get("FontFile2");
+                  if (!fontFile2.isStream()) continue;
 
-                // Determine which chars are missing
-                const allChars = [...new Set(request.newText)];
+                  // Extract font binary
+                  const subsetBuf = fontFile2.readStream();
+                  const subsetArray = subsetBuf.asUint8Array();
+                  const subsetBuffer = new ArrayBuffer(subsetArray.byteLength);
+                  new Uint8Array(subsetBuffer).set(subsetArray);
 
-                // Match a reference font
-                const parsed = parseFontName(baseFontName);
-                const flags = descriptor.get("Flags")?.asNumber?.() || 0;
-                const match = matchReferenceFont(parsed, flags);
+                  const baseFontName = fontObj.get("BaseFont").asName();
+                  const missingInThisFont: string[] = [];
 
-                // Fetch reference font (synchronous in worker — use importScripts or pre-loaded)
-                // For now, use the bundled local fonts via synchronous XHR
-                const fontPath = getLocalFontPath(match);
-                const xhr = new XMLHttpRequest();
-                xhr.open("GET", fontPath, false); // synchronous
-                xhr.responseType = "arraybuffer";
-                xhr.send();
-
-                if (xhr.status !== 200 || !xhr.response) {
-                  console.warn(`[FontAugment] Failed to fetch reference font: ${fontPath}`);
-                  return;
-                }
-
-                const refBuffer = xhr.response as ArrayBuffer;
-                console.log(`[FontAugment] Matched "${baseFontName}" → ${match.googleFamily} (${match.confidence})`);
-
-                // Augment the font
-                const augmented = augmentFont(subsetBuffer, refBuffer, allChars);
-                if (!augmented) {
-                  console.log(`[FontAugment] No missing glyphs — all chars already in font`);
-                  return;
-                }
-
-                // Write the augmented font back to the PDF
-                fontFile2.writeStream(new Uint8Array(augmented));
-                console.log(`[FontAugment] ✓ Augmented font written back to PDF`);
-
-                // Now retry content stream replacement
-                if (contentsRef.isArray()) {
-                  for (let i = 0; i < contentsRef.length; i++) {
-                    if (tryStreamReplace(contentsRef.get(i))) { tier1Success = true; break; }
+                  // Check each new character individually using opentype.js
+                  try {
+                    const opentype = await import("opentype.js");
+                    const parsedFont = opentype.parse(subsetBuffer);
+                    if (parsedFont) {
+                      for (const ch of newChars) {
+                        const glyph = parsedFont.charToGlyph(ch);
+                        if (!glyph || glyph.index === 0) {
+                          missingInThisFont.push(ch);
+                        }
+                      }
+                    }
+                  } catch {
+                    missingInThisFont.push(...newChars);
                   }
-                } else if (contentsRef.isStream()) {
-                  if (tryStreamReplace(contentsRef)) tier1Success = true;
+
+                  if (missingInThisFont.length === 0) continue;
+
+                  needsAugmentation = true;
+                  console.log(`[FontAugment] Font "${baseFontName}" missing glyphs for: ${missingInThisFont.join(", ")}`);
+
+                  // Match and fetch reference font
+                  const parsed = parseFontName(baseFontName);
+                  const flags = descriptor.get("Flags")?.asNumber?.() || 0;
+                  const match = matchReferenceFont(parsed, flags);
+                  const fontPath = getLocalFontPath(match);
+
+                  const xhr = new XMLHttpRequest();
+                  xhr.open("GET", fontPath, false);
+                  xhr.responseType = "arraybuffer";
+                  xhr.send();
+
+                  if (xhr.status !== 200 || !xhr.response) {
+                    console.warn(`[FontAugment] Failed to fetch reference font: ${fontPath}`);
+                    continue;
+                  }
+
+                  console.log(`[FontAugment] Matched "${baseFontName}" → ${match.googleFamily} (${match.confidence})`);
+                  const augmented = augmentFont(subsetBuffer, xhr.response as ArrayBuffer, missingInThisFont);
+                  if (augmented) {
+                    fontFile2.writeStream(new Uint8Array(augmented));
+                    console.log(`[FontAugment] ✓ Augmented font "${baseFontName}" with ${missingInThisFont.length} glyph(s)`);
+                    augmentedAnyFont = true;
+                  }
+                } catch (fontErr) {
+                  console.warn(`[FontAugment] Error processing font ${fontKey}:`, fontErr);
                 }
-              } catch (fontErr) {
-                console.warn(`[FontAugment] Error processing font ${fontKey}:`, fontErr);
               }
-            });
+            }
+          } catch (err) {
+            console.warn("[FontAugment] Glyph check failed:", err);
           }
-        } catch (err) {
-          console.warn("[FontAugment] Tier 1 failed:", err);
         }
 
-        if (tier1Success) {
-          respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 1, method: "font-augment" });
+        // --- Step 2: Content stream replacement ---
+        // (Now safe because we augmented any fonts that were missing glyphs)
+        if (doStreamReplace()) {
+          const method = augmentedAnyFont ? "font-augment" : "content-stream";
+          respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 1, method });
           break;
         }
 
-        // --- Tier 2: Side-by-side font embedding ---
-        // (Disabled for now — can be re-enabled when positioning is fixed)
-        console.warn(`[TextEdit] All tiers failed for "${request.oldText}" on page ${request.page}`);
+        // --- Step 3: Failed ---
+        console.warn(`[TextEdit] All methods failed for "${request.oldText}" on page ${request.page}`);
         respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 0, method: "failed" });
         break;
       }
