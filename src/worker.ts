@@ -631,9 +631,41 @@ self.onmessage = async function (e: MessageEvent) {
           console.warn("[FontAugment] Glyph check failed:", err);
         }
 
-        // --- Step 2: Content stream replacement ---
-        // (Now safe because we augmented any fonts that were missing glyphs)
-        if (doStreamReplace()) {
+        // --- Step 2: If we augmented fonts, save+reopen to flush MuPDF's font cache ---
+        if (augmentedAnyFont) {
+          console.log(`[FontAugment] Saving and reopening document to flush MuPDF font cache...`);
+          const buf = doc!.saveToBuffer("compress");
+          const bytes = buf.asUint8Array();
+          const freshBuffer = new ArrayBuffer(bytes.byteLength);
+          new Uint8Array(freshBuffer).set(bytes);
+          doc = new mupdf.PDFDocument(freshBuffer);
+          console.log(`[FontAugment] Document reopened (${freshBuffer.byteLength} bytes)`);
+        }
+
+        // --- Step 3: Content stream replacement ---
+        // Re-get page references after potential reopen
+        const finalPage = doc!.loadPage(request.page) as mupdf.PDFPage;
+        const finalPageObj = finalPage.getObject();
+        const finalContentsRef = finalPageObj.get("Contents");
+
+        const doFinalStreamReplace = (): boolean => {
+          if (finalContentsRef.isArray()) {
+            for (let i = 0; i < finalContentsRef.length; i++) {
+              const streamRef = finalContentsRef.get(i);
+              if (!streamRef.isStream()) continue;
+              const streamData = streamRef.readStream().asString();
+              const { result, count } = replaceInStream(streamData, request.oldText, request.newText);
+              if (count > 0) { streamRef.writeStream(result); return true; }
+            }
+          } else if (finalContentsRef.isStream()) {
+            const streamData = finalContentsRef.readStream().asString();
+            const { result, count } = replaceInStream(streamData, request.oldText, request.newText);
+            if (count > 0) { finalContentsRef.writeStream(result); return true; }
+          }
+          return false;
+        };
+
+        if (augmentedAnyFont ? doFinalStreamReplace() : doStreamReplace()) {
           const method = augmentedAnyFont ? "font-augment" : "content-stream";
           respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 1, method });
           break;
