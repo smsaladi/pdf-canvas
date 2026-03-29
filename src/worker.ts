@@ -678,6 +678,17 @@ self.onmessage = async function (e: MessageEvent) {
         break;
       }
 
+      case "rotatePage": {
+        const rPage = doc!.loadPage(request.page) as mupdf.PDFPage;
+        const pageObj = rPage.getObject();
+        let currentRotation = 0;
+        try { currentRotation = pageObj.get("Rotate")?.asNumber?.() || 0; } catch {}
+        const newRotation = ((currentRotation + request.angle) % 360 + 360) % 360;
+        pageObj.put("Rotate", newRotation);
+        respond(_rpcId, { type: "pageRotated", page: request.page, info: getPageInfo(request.page) });
+        break;
+      }
+
       case "save": {
         // Strip unused glyphs from any augmented/embedded fonts
         try { doc!.subsetFonts(); } catch {}

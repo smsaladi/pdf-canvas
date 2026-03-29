@@ -158,6 +158,34 @@ export class Viewport {
     return this.scale;
   }
 
+  fitToWidth(): void {
+    if (this.pages.length === 0) return;
+    // Use the current page's width, or first page
+    const curPage = this.pages[this.getCurrentPage()] || this.pages[0];
+    const availWidth = this.container.clientWidth - 32; // 16px padding each side
+    const newScale = availWidth / curPage.width;
+    this.setZoom(newScale);
+  }
+
+  fitToPage(): void {
+    if (this.pages.length === 0) return;
+    const curPage = this.pages[this.getCurrentPage()] || this.pages[0];
+    const availWidth = this.container.clientWidth - 32;
+    const availHeight = this.container.clientHeight - 32;
+    const scaleW = availWidth / curPage.width;
+    const scaleH = availHeight / curPage.height;
+    this.setZoom(Math.min(scaleW, scaleH));
+  }
+
+  /** Update a page's info (e.g. after rotation changes dimensions) */
+  updatePageInfo(pageIndex: number, info: PageInfo): void {
+    const idx = this.pages.findIndex(p => p.index === pageIndex);
+    if (idx >= 0) this.pages[idx] = info;
+    this.renderedAtScale.delete(pageIndex);
+    this.buildPageLayout();
+    this.scheduleRender();
+  }
+
   scrollToPage(pageIndex: number): void {
     const container = this.pageContainers.get(pageIndex);
     if (container) {

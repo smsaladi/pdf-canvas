@@ -155,17 +155,11 @@ export function matchReferenceFont(
 // Maps Google Font family + style to bundled TTF file path
 export function getLocalFontPath(match: FontMatchResult): string {
   const base = match.googleFamily;
-  if (base === "Arimo") {
-    return `/fonts/Arimo-Regular.ttf`; // Variable font — covers all weights
-  }
-  if (base === "Tinos") {
-    return match.bold ? `/fonts/Tinos-Bold.ttf` : `/fonts/Tinos-Regular.ttf`;
-  }
-  if (base === "Cousine") {
-    return `/fonts/Cousine-Regular.ttf`;
-  }
-  // Default fallback
-  return `/fonts/Arimo-Regular.ttf`;
+  const variant = match.bold ? "Bold" : "Regular";
+  if (base === "Arimo") return `/fonts/Arimo-${variant}.ttf`;
+  if (base === "Tinos") return `/fonts/Tinos-${variant}.ttf`;
+  if (base === "Cousine") return `/fonts/Cousine-${variant}.ttf`;
+  return `/fonts/Arimo-${variant}.ttf`;
 }
 
 // --- Font augmentation with opentype.js ---

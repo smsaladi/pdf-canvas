@@ -203,6 +203,17 @@ function init() {
   document.getElementById("btn-insert-image")!.addEventListener("click", insertImage);
   document.getElementById("btn-zoom-in")!.addEventListener("click", () => viewport.setZoom(viewport.getZoom() + 0.25));
   document.getElementById("btn-zoom-out")!.addEventListener("click", () => viewport.setZoom(viewport.getZoom() - 0.25));
+  document.getElementById("btn-fit-width")!.addEventListener("click", () => viewport.fitToWidth());
+  document.getElementById("btn-fit-page")!.addEventListener("click", () => viewport.fitToPage());
+  document.getElementById("btn-rotate-cw")!.addEventListener("click", async () => {
+    if (!hasOpenDocument) return;
+    const page = viewport.getCurrentPage();
+    const response = await rpc.send({ type: "rotatePage", page, angle: 90 });
+    if (response.type === "pageRotated") {
+      viewport.updatePageInfo(page, response.info);
+      await viewport.rerenderPage(page);
+    }
+  });
 
   // Undo/redo buttons
   const btnUndo = document.getElementById("btn-undo") as HTMLButtonElement;
@@ -374,6 +385,20 @@ async function handleKeyDown(e: KeyboardEvent): Promise<void> {
     e.preventDefault();
     await saveFile();
     return;
+  }
+
+  // Tool shortcuts (single key, no modifier, not while editing text)
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && !isEditingText()) {
+    const toolKeys: Record<string, import("./toolbar").ToolMode> = {
+      v: "select", t: "textedit", n: "note", f: "freetext",
+      h: "highlight", r: "rectangle", c: "circle", l: "line", d: "ink",
+    };
+    const tool = toolKeys[e.key.toLowerCase()];
+    if (tool) {
+      e.preventDefault();
+      toolbar.setTool(tool);
+      return;
+    }
   }
 
   // Arrow keys: nudge selected annotation by 1pt
