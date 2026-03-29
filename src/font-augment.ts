@@ -189,17 +189,25 @@ export function augmentFont(
 
     if (!subset || !reference) return null;
 
-    // Collect all existing glyphs from the subset
+    // Collect all existing glyphs, tracking which unicodes have REAL outlines
     const glyphs: opentype.Glyph[] = [];
-    const existingUnicodes = new Set<number>();
+    const unicodesWithOutlines = new Set<number>();
+    const emptyGlyphIndices = new Set<number>(); // glyphs with unicode but no path
 
     for (let i = 0; i < subset.glyphs.length; i++) {
       const g = subset.glyphs.get(i);
       glyphs.push(g);
       if (g.unicode !== undefined && g.unicode !== null) {
-        existingUnicodes.add(g.unicode);
+        const hasPath = g.path && g.path.commands && g.path.commands.length > 0;
+        if (hasPath) {
+          unicodesWithOutlines.add(g.unicode);
+        } else {
+          emptyGlyphIndices.add(i);
+        }
       }
     }
+
+    console.log(`[FontAugment] Subset has ${glyphs.length} glyphs, ${unicodesWithOutlines.size} with outlines, ${emptyGlyphIndices.size} empty`);
 
     // Scale factor if unitsPerEm differs
     const scaleFactor = subset.unitsPerEm / reference.unitsPerEm;
@@ -207,10 +215,16 @@ export function augmentFont(
 
     for (const char of missingChars) {
       const codePoint = char.codePointAt(0);
-      if (codePoint === undefined || existingUnicodes.has(codePoint)) continue;
+      if (codePoint === undefined) continue;
+
+      // Skip if this unicode already has a real outline in the subset
+      if (unicodesWithOutlines.has(codePoint)) continue;
 
       const refGlyph = reference.charToGlyph(char);
-      if (!refGlyph || !refGlyph.path) continue;
+      if (!refGlyph || !refGlyph.path || refGlyph.path.commands.length === 0) {
+        console.warn(`[FontAugment] Reference font has no outline for "${char}" either`);
+        continue;
+      }
 
       // Scale the glyph path if needed
       let path = refGlyph.path;
@@ -228,19 +242,43 @@ export function augmentFont(
         }
       }
 
-      const newGlyph = new opentype.Glyph({
-        name: refGlyph.name || `uni${codePoint.toString(16).padStart(4, "0")}`,
-        unicode: codePoint,
-        advanceWidth: Math.round((refGlyph.advanceWidth || 0) * scaleFactor),
-        path,
-      });
+      // Find the existing empty glyph for this codepoint and REPLACE it
+      // (rather than adding a duplicate unicode mapping)
+      let replaced = false;
+      for (let i = 0; i < glyphs.length; i++) {
+        if (glyphs[i].unicode === codePoint && emptyGlyphIndices.has(i)) {
+          // Replace the empty glyph in-place
+          glyphs[i] = new opentype.Glyph({
+            name: refGlyph.name || glyphs[i].name || `uni${codePoint.toString(16).padStart(4, "0")}`,
+            unicode: codePoint,
+            advanceWidth: Math.round((refGlyph.advanceWidth || 0) * scaleFactor),
+            path,
+          });
+          replaced = true;
+          console.log(`[FontAugment] Replaced empty glyph at index ${i} for "${char}" (${refGlyph.path.commands.length} path cmds)`);
+          break;
+        }
+      }
 
-      glyphs.push(newGlyph);
-      existingUnicodes.add(codePoint);
+      if (!replaced) {
+        // No existing empty glyph — append new one
+        glyphs.push(new opentype.Glyph({
+          name: refGlyph.name || `uni${codePoint.toString(16).padStart(4, "0")}`,
+          unicode: codePoint,
+          advanceWidth: Math.round((refGlyph.advanceWidth || 0) * scaleFactor),
+          path,
+        }));
+        console.log(`[FontAugment] Appended new glyph for "${char}" (${refGlyph.path.commands.length} path cmds)`);
+      }
+
+      unicodesWithOutlines.add(codePoint);
       addedCount++;
     }
 
-    if (addedCount === 0) return null; // Nothing was missing
+    if (addedCount === 0) {
+      console.log(`[FontAugment] No glyphs needed augmentation`);
+      return null;
+    }
 
     // Rebuild font with all glyphs (original + new)
     const augmented = new opentype.Font({
