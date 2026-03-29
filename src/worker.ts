@@ -538,6 +538,12 @@ self.onmessage = async function (e: MessageEvent) {
                   continue;
                 }
 
+                // If we know which font the selected text uses, only process that one
+                if (request.fontName && baseFontName !== request.fontName) {
+                  console.log(`[FontAugment] Skipping /${fontKey} "${baseFontName}" (not the selected text's font "${request.fontName}")`);
+                  continue;
+                }
+
                 const encoding = fontObj.get("Encoding");
                 const encodingName = encoding.isName() ? encoding.asName() : (encoding.isDictionary() ? "custom" : "none");
 

@@ -74,8 +74,10 @@ function init() {
   };
 
   // Wire text edit commits
-  textLayer.onCommit(async (page, oldText, newText, _selection, styleOverride) => {
-    console.log(`[TextEdit] Replacing "${oldText}" → "${newText}" on page ${page}`);
+  textLayer.onCommit(async (page, oldText, newText, selection, styleOverride) => {
+    // Get the font name from the first selected character
+    const selFontName = selection.chars[0]?.info.fontName || undefined;
+    console.log(`[TextEdit] Replacing "${oldText}" → "${newText}" on page ${page} (font: ${selFontName || "unknown"})`);
     const response = await rpc.send({
       type: "replaceTextSmart",
       page,
@@ -83,6 +85,7 @@ function init() {
       newText,
       boldOverride: styleOverride?.bold,
       italicOverride: styleOverride?.italic,
+      fontName: selFontName,
     });
 
     if (response.type === "textReplacedSmart") {

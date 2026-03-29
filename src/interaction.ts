@@ -45,7 +45,11 @@ interface CreationState {
   pageIndex: number;
   startScreenX: number;
   startScreenY: number;
+  lastX: number;
+  lastY: number;
   previewEl: HTMLDivElement;
+  svgEl?: SVGSVGElement;
+  pathEl?: SVGElement;
   inkPoints?: Array<[number, number]>;
 }
 
@@ -232,31 +236,44 @@ export class InteractionLayer {
       return;
     }
 
-    // Handle creation drag
+    // Handle creation drag — update live SVG preview
     if (this.creationState) {
       const container = this.overlayContainers.get(this.creationState.pageIndex);
       if (!container) return;
       const rect = container.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+      const { startScreenX: sx, startScreenY: sy, pathEl, tool } = this.creationState;
+      this.creationState.lastX = x;
+      this.creationState.lastY = y;
 
-      if (this.creationState.tool === "ink" && this.creationState.inkPoints) {
-        this.creationState.inkPoints.push([x, y]);
-        // Update preview as bounding box of all points
-        const pts = this.creationState.inkPoints;
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const [px, py] of pts) { minX = Math.min(minX, px); minY = Math.min(minY, py); maxX = Math.max(maxX, px); maxY = Math.max(maxY, py); }
-        this.creationState.previewEl.style.left = `${minX}px`;
-        this.creationState.previewEl.style.top = `${minY}px`;
-        this.creationState.previewEl.style.width = `${maxX - minX}px`;
-        this.creationState.previewEl.style.height = `${maxY - minY}px`;
-      } else {
-        const sx = this.creationState.startScreenX;
-        const sy = this.creationState.startScreenY;
-        this.creationState.previewEl.style.left = `${Math.min(sx, x)}px`;
-        this.creationState.previewEl.style.top = `${Math.min(sy, y)}px`;
-        this.creationState.previewEl.style.width = `${Math.abs(x - sx)}px`;
-        this.creationState.previewEl.style.height = `${Math.abs(y - sy)}px`;
+      if (pathEl) {
+        switch (tool) {
+          case "ink":
+            if (this.creationState.inkPoints) {
+              this.creationState.inkPoints.push([x, y]);
+              const d = pathEl.getAttribute("d") || "";
+              pathEl.setAttribute("d", d + `L${x},${y}`);
+            }
+            break;
+          case "line":
+            pathEl.setAttribute("x2", String(x));
+            pathEl.setAttribute("y2", String(y));
+            break;
+          case "circle":
+            pathEl.setAttribute("cx", String((sx + x) / 2));
+            pathEl.setAttribute("cy", String((sy + y) / 2));
+            pathEl.setAttribute("rx", String(Math.abs(x - sx) / 2));
+            pathEl.setAttribute("ry", String(Math.abs(y - sy) / 2));
+            break;
+          default:
+            // rectangle, freetext, highlight
+            pathEl.setAttribute("x", String(Math.min(sx, x)));
+            pathEl.setAttribute("y", String(Math.min(sy, y)));
+            pathEl.setAttribute("width", String(Math.abs(x - sx)));
+            pathEl.setAttribute("height", String(Math.abs(y - sy)));
+            break;
+        }
       }
       return;
     }
@@ -399,6 +416,10 @@ export class InteractionLayer {
 
   // --- Creation ---
 
+  private colorToCSS(c: number[]): string {
+    return `rgb(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)})`;
+  }
+
   private startCreation(pageIndex: number, e: PointerEvent): void {
     const container = this.overlayContainers.get(pageIndex);
     if (!container) return;
@@ -413,13 +434,94 @@ export class InteractionLayer {
       return;
     }
 
-    // Create a preview element for drag-to-create
+    // Create a full-page SVG overlay for live preview rendering
     const preview = document.createElement("div");
     preview.className = "creation-preview";
-    preview.style.left = `${x}px`;
-    preview.style.top = `${y}px`;
-    preview.style.width = "0px";
-    preview.style.height = "0px";
+    preview.style.left = "0px";
+    preview.style.top = "0px";
+    preview.style.width = `${container.clientWidth}px`;
+    preview.style.height = `${container.clientHeight}px`;
+    preview.style.border = "none";
+    preview.style.background = "none";
+
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("width", "100%");
+    svg.setAttribute("height", "100%");
+    svg.style.position = "absolute";
+    svg.style.left = "0";
+    svg.style.top = "0";
+    svg.style.overflow = "visible";
+
+    const strokeColor = this.colorToCSS(this.currentColor);
+    const fillColor = this.currentFillColor ? this.colorToCSS(this.currentFillColor) : "none";
+    const bw = this.currentBorderWidth;
+    let shapeEl: SVGElement;
+
+    switch (this.currentTool) {
+      case "ink": {
+        const path = document.createElementNS(NS, "path");
+        path.setAttribute("d", `M${x},${y}`);
+        path.setAttribute("stroke", strokeColor);
+        path.setAttribute("stroke-width", String(bw));
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke-linecap", "round");
+        path.setAttribute("stroke-linejoin", "round");
+        shapeEl = path;
+        break;
+      }
+      case "line": {
+        const line = document.createElementNS(NS, "line");
+        line.setAttribute("x1", String(x));
+        line.setAttribute("y1", String(y));
+        line.setAttribute("x2", String(x));
+        line.setAttribute("y2", String(y));
+        line.setAttribute("stroke", strokeColor);
+        line.setAttribute("stroke-width", String(bw));
+        line.setAttribute("stroke-linecap", "round");
+        shapeEl = line;
+        break;
+      }
+      case "circle": {
+        const ellipse = document.createElementNS(NS, "ellipse");
+        ellipse.setAttribute("cx", String(x));
+        ellipse.setAttribute("cy", String(y));
+        ellipse.setAttribute("rx", "0");
+        ellipse.setAttribute("ry", "0");
+        ellipse.setAttribute("stroke", strokeColor);
+        ellipse.setAttribute("stroke-width", String(bw));
+        ellipse.setAttribute("fill", fillColor);
+        shapeEl = ellipse;
+        break;
+      }
+      case "highlight": {
+        const r = document.createElementNS(NS, "rect");
+        r.setAttribute("x", String(x));
+        r.setAttribute("y", String(y));
+        r.setAttribute("width", "0");
+        r.setAttribute("height", "0");
+        r.setAttribute("fill", strokeColor);
+        r.setAttribute("opacity", "0.35");
+        shapeEl = r;
+        break;
+      }
+      default: {
+        // rectangle, freetext
+        const r = document.createElementNS(NS, "rect");
+        r.setAttribute("x", String(x));
+        r.setAttribute("y", String(y));
+        r.setAttribute("width", "0");
+        r.setAttribute("height", "0");
+        r.setAttribute("stroke", strokeColor);
+        r.setAttribute("stroke-width", String(bw));
+        r.setAttribute("fill", fillColor);
+        shapeEl = r;
+        break;
+      }
+    }
+
+    svg.appendChild(shapeEl);
+    preview.appendChild(svg);
     container.appendChild(preview);
 
     this.creationState = {
@@ -427,7 +529,11 @@ export class InteractionLayer {
       pageIndex,
       startScreenX: x,
       startScreenY: y,
+      lastX: x,
+      lastY: y,
       previewEl: preview,
+      svgEl: svg,
+      pathEl: shapeEl,
       inkPoints: this.currentTool === "ink" ? [[x, y]] : undefined,
     };
 
@@ -472,9 +578,9 @@ export class InteractionLayer {
 
   private async finishCreation(): Promise<void> {
     if (!this.creationState) return;
-    const { tool, pageIndex, startScreenX, startScreenY, previewEl, inkPoints } = this.creationState;
-    const endX = parseFloat(previewEl.style.left) + parseFloat(previewEl.style.width);
-    const endY = parseFloat(previewEl.style.top) + parseFloat(previewEl.style.height);
+    const { tool, pageIndex, startScreenX, startScreenY, lastX, lastY, previewEl, inkPoints } = this.creationState;
+    const endX = lastX;
+    const endY = lastY;
     previewEl.remove();
     this.creationState = null;
 
