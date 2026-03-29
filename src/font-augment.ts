@@ -150,9 +150,19 @@ export function matchReferenceFont(
   };
 }
 
-// --- Local font file mapping ---
+// --- Font loading (local bundled or Google Fonts CDN) ---
 
-// Maps Google Font family + style to bundled TTF file path
+// Cache for fetched fonts (keyed by URL)
+const fontCache = new Map<string, ArrayBuffer>();
+
+// Google Fonts CSS API URL patterns for weight+italic
+function getGoogleFontsCSSUrl(family: string, bold: boolean, italic: boolean): string {
+  const weight = bold ? 700 : 400;
+  const ital = italic ? 1 : 0;
+  return `https://fonts.googleapis.com/css2?family=${family}:ital,wght@${ital},${weight}`;
+}
+
+// Maps Google Font family + style to bundled TTF file path (fallback for offline)
 export function getLocalFontPath(match: FontMatchResult): string {
   const base = match.googleFamily;
   let variant: string;
@@ -161,11 +171,68 @@ export function getLocalFontPath(match: FontMatchResult): string {
   else if (match.italic) variant = "Italic";
   else variant = "Regular";
 
-  // We have full variants for Arimo; Tinos/Cousine only Regular+Bold
   if (base === "Arimo") return `/fonts/Arimo-${variant}.ttf`;
   if (base === "Tinos") return `/fonts/Tinos-${match.bold ? "Bold" : "Regular"}.ttf`;
   if (base === "Cousine") return `/fonts/Cousine-${match.bold ? "Bold" : "Regular"}.ttf`;
   return `/fonts/Arimo-${variant}.ttf`;
+}
+
+/**
+ * Fetch a reference font, trying Google Fonts CDN first, falling back to local bundle.
+ * Results are cached so subsequent calls are instant.
+ */
+export function fetchFont(match: FontMatchResult): ArrayBuffer | null {
+  const localPath = getLocalFontPath(match);
+  const cacheKey = `${match.googleFamily}-${match.bold ? "B" : "R"}${match.italic ? "I" : ""}`;
+
+  // Check cache first
+  if (fontCache.has(cacheKey)) {
+    console.log(`[FontFetch] Cache hit: ${cacheKey}`);
+    return fontCache.get(cacheKey)!;
+  }
+
+  // Try Google Fonts CDN first (gets the exact weight/style)
+  try {
+    const cssUrl = getGoogleFontsCSSUrl(match.googleFamily, match.bold, match.italic);
+    const cssXhr = new XMLHttpRequest();
+    cssXhr.open("GET", cssUrl, false);
+    cssXhr.send();
+
+    if (cssXhr.status === 200) {
+      const ttfUrl = cssXhr.responseText.match(/url\((https:\/\/[^)]+\.ttf)\)/)?.[1];
+      if (ttfUrl) {
+        const fontXhr = new XMLHttpRequest();
+        fontXhr.open("GET", ttfUrl, false);
+        fontXhr.responseType = "arraybuffer";
+        fontXhr.send();
+
+        if (fontXhr.status === 200 && fontXhr.response) {
+          const buffer = fontXhr.response as ArrayBuffer;
+          fontCache.set(cacheKey, buffer);
+          console.log(`[FontFetch] Downloaded from Google Fonts: ${cacheKey} (${buffer.byteLength} bytes)`);
+          return buffer;
+        }
+      }
+    }
+  } catch (e) {
+    console.log(`[FontFetch] Google Fonts unavailable, using local fallback`);
+  }
+
+  // Fallback to local bundled font
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", localPath, false);
+  xhr.responseType = "arraybuffer";
+  xhr.send();
+
+  if (xhr.status === 200 && xhr.response) {
+    const buffer = xhr.response as ArrayBuffer;
+    fontCache.set(cacheKey, buffer);
+    console.log(`[FontFetch] Loaded local: ${localPath} (${buffer.byteLength} bytes)`);
+    return buffer;
+  }
+
+  console.warn(`[FontFetch] Failed to load font: ${cacheKey}`);
+  return null;
 }
 
 // --- Font augmentation with opentype.js ---

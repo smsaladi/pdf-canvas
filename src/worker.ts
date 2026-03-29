@@ -3,7 +3,7 @@ import * as mupdf from "mupdf";
 import { createWorkerResponder } from "./worker-rpc";
 import type { WorkerRequest, WorkerResponse, PageInfo, AnnotationDTO, TextBlock, TextLine, CharInfo, PageTextData, TextSearchResult } from "./types";
 import { replaceTextInStream as replaceInStream, replaceTextWithFontSwitch } from "./content-stream";
-import { parseFontName, matchReferenceFont, getLocalFontPath, augmentFont } from "./font-augment";
+import { parseFontName, matchReferenceFont, fetchFont, augmentFont } from "./font-augment";
 
 const respond = createWorkerResponder(self);
 
@@ -319,7 +319,7 @@ self.onmessage = async function (e: MessageEvent) {
         // Apply optional properties (used for undo-delete restoration and creation with defaults)
         const props = request.properties;
         if (props) {
-          if (props.color && props.color.length >= 3) annot.setColor(props.color as mupdf.AnnotColor);
+          if (props.color !== undefined) annot.setColor(props.color as mupdf.AnnotColor);
           if (props.opacity !== undefined) annot.setOpacity(props.opacity);
           if (props.contents) annot.setContents(props.contents);
           if (props.icon && annot.hasIcon()) annot.setIcon(props.icon);
@@ -633,19 +633,15 @@ self.onmessage = async function (e: MessageEvent) {
                   const match = matchReferenceFont(parsed, flags);
                   if (request.boldOverride !== undefined) match.bold = request.boldOverride;
                   if (request.italicOverride !== undefined) match.italic = request.italicOverride;
-                  const fontPath = getLocalFontPath(match);
+                  const refBuffer = fetchFont(match);
+                  if (!refBuffer) continue;
 
-                  const xhr = new XMLHttpRequest();
-                  xhr.open("GET", fontPath, false);
-                  xhr.responseType = "arraybuffer";
-                  xhr.send();
-                  if (xhr.status !== 200 || !xhr.response) continue;
-
-                  const newFont = new mupdf.Font(baseFontName + "_edit", xhr.response as ArrayBuffer);
+                  const newFont = new mupdf.Font(baseFontName + "_edit", refBuffer);
                   const newFontResource = doc!.addSimpleFont(newFont, "Latin");
                   const editFontKey = "F_edit_" + Date.now();
                   fontDict.put(editFontKey, newFontResource);
-                  console.log(`[FontAugment] Added /${editFontKey} (${match.bold ? "Bold" : "Regular"}) for style switch`);
+                  const styleDesc = `${match.bold ? "Bold" : "Regular"}${match.italic ? " Italic" : ""}`;
+                  console.log(`[FontAugment] Added /${editFontKey} (${styleDesc}) for style switch`);
 
                   // Do content stream replacement with font switching
                   const doFontSwitchReplace = (): boolean => {
@@ -680,23 +676,17 @@ self.onmessage = async function (e: MessageEvent) {
                 // Apply user style overrides (Ctrl+B/I)
                 if (request.boldOverride !== undefined) match.bold = request.boldOverride;
                 if (request.italicOverride !== undefined) match.italic = request.italicOverride;
-                const fontPath = getLocalFontPath(match);
-                console.log(`[FontAugment] Matched "${baseFontName}" → ${match.googleFamily} (${match.confidence}), fetching ${fontPath}`);
+                console.log(`[FontAugment] Matched "${baseFontName}" → ${match.googleFamily} (${match.confidence})`);
 
-                const xhr = new XMLHttpRequest();
-                xhr.open("GET", fontPath, false);
-                xhr.responseType = "arraybuffer";
-                xhr.send();
-
-                if (xhr.status !== 200 || !xhr.response) {
-                  console.warn(`[FontAugment] ✗ Failed to fetch reference font: ${fontPath} (status ${xhr.status})`);
+                const refBuffer = fetchFont(match);
+                if (!refBuffer) {
+                  console.warn(`[FontAugment] ✗ Failed to fetch reference font`);
                   continue;
                 }
-                console.log(`[FontAugment] Fetched reference font: ${(xhr.response as ArrayBuffer).byteLength} bytes`);
 
                 let fontBufferToUse: ArrayBuffer;
                 if (missingInThisFont.length > 0) {
-                  const augmented = augmentFont(subsetBuffer, xhr.response as ArrayBuffer, missingInThisFont);
+                  const augmented = augmentFont(subsetBuffer, refBuffer, missingInThisFont);
                   if (augmented) {
                     fontBufferToUse = augmented;
                     console.log(`[FontAugment] Augmented with ${missingInThisFont.length} glyph(s): ${missingInThisFont.join(", ")}`);
@@ -706,7 +696,7 @@ self.onmessage = async function (e: MessageEvent) {
                   }
                 } else {
                   // Style override only — use the reference font directly
-                  fontBufferToUse = xhr.response as ArrayBuffer;
+                  fontBufferToUse = refBuffer;
                   console.log(`[FontAugment] Using reference font directly for style change`);
                 }
 
