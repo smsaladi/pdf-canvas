@@ -382,6 +382,87 @@ self.onmessage = async function (e: MessageEvent) {
                           let prevCharAdvance = Math.round(fontForMetrics.advanceGlyph(lastOrigGid) * advanceScale * 10) / 10;
                           let skippedAdvance = 0; // accumulate advances of skipped chars
 
+                          // Check for chars missing from CMap and augment if needed
+                          const missingFromCmap = [...new Set(extraChars)].filter(ch => !unicodeToGid!.get(ch));
+                          if (missingFromCmap.length > 0 && unicodeToGid) {
+                            console.log(`[ContentMap] Characters missing from CMap: ${missingFromCmap.join("")} — augmenting font + CMap`);
+                            try {
+                              // Find the Type0 font and its CMap
+                              const fDict2 = pageObj.get("Resources")?.get("Font");
+                              if (fDict2) {
+                                const fKeys2: string[] = [];
+                                fDict2.forEach((_: any, k: string | number) => fKeys2.push(String(k)));
+                                for (const fk of fKeys2) {
+                                  const fo = fDict2.get(fk);
+                                  if (fo.get("Subtype").asName() !== "Type0") continue;
+
+                                  // Get the font data for glyph injection
+                                  const descFonts = fo.get("DescendantFonts");
+                                  if (!descFonts.isArray() || descFonts.length === 0) continue;
+                                  const cidFont = descFonts.get(0);
+                                  const fontDesc = cidFont.get("FontDescriptor");
+                                  if (fontDesc.isNull()) continue;
+                                  const ff2 = fontDesc.get("FontFile2");
+                                  if (!ff2.isStream()) continue;
+
+                                  const fontBytes = ff2.readStream().asUint8Array();
+                                  const fontBuf = new ArrayBuffer(fontBytes.byteLength);
+                                  new Uint8Array(fontBuf).set(fontBytes);
+
+                                  // Match reference font and augment
+                                  const baseName = fo.get("BaseFont").asName();
+                                  const parsed = parseFontName(baseName);
+                                  const match = matchReferenceFont(parsed);
+                                  const refBuf = fetchFont(match);
+                                  if (!refBuf) continue;
+
+                                  const augmented = augmentFont(fontBuf, refBuf, missingFromCmap);
+                                  if (augmented) {
+                                    // Write augmented font and replace resource
+                                    const newFont = new mupdf.Font(baseName, augmented);
+                                    const newFontRes = getDoc().addFont(newFont);
+                                    fDict2.put(fk, newFontRes);
+                                    mupdf.emptyStore();
+                                    console.log(`[ContentMap] ✓ Augmented font "${baseName}" with ${missingFromCmap.length} glyph(s)`);
+
+                                    // Update ToUnicode CMap with new entries
+                                    // Use opentype.js to find the GIDs assigned to the new chars
+                                    const opentype2 = await import("opentype.js");
+                                    const augParsed = opentype2.parse(augmented);
+                                    if (augParsed) {
+                                      const toUnicode = fo.get("ToUnicode");
+                                      if (toUnicode.isStream()) {
+                                        let cmapText = toUnicode.readStream().asString();
+                                        const newEntries: string[] = [];
+                                        for (const ch of missingFromCmap) {
+                                          const glyph = augParsed.charToGlyph(ch);
+                                          if (glyph && glyph.index > 0) {
+                                            const gidHex = glyph.index.toString(16).padStart(4, "0");
+                                            const uniHex = ch.charCodeAt(0).toString(16).padStart(4, "0");
+                                            newEntries.push(`<${gidHex}> <${uniHex}>`);
+                                            unicodeToGid.set(ch, glyph.index);
+                                            console.log(`[ContentMap] Added CMap: GID 0x${gidHex} → "${ch}" (U+${uniHex})`);
+                                          }
+                                        }
+                                        if (newEntries.length > 0) {
+                                          // Add entries to the bfchar section
+                                          cmapText = cmapText.replace(
+                                            /(\d+)\s+beginbfchar\n/,
+                                            (_, count) => `${parseInt(count) + newEntries.length} beginbfchar\n${newEntries.join("\n")}\n`
+                                          );
+                                          toUnicode.writeStream(cmapText);
+                                        }
+                                      }
+                                    }
+                                  }
+                                  break;
+                                }
+                              }
+                            } catch (augErr) {
+                              console.warn("[ContentMap] Type0 font augmentation failed:", augErr);
+                            }
+                          }
+
                           for (const ch of extraChars) {
                             const gid = unicodeToGid.get(ch);
                             if (gid !== undefined) {
@@ -390,10 +471,8 @@ self.onmessage = async function (e: MessageEvent) {
                               prevCharAdvance = Math.round(fontForMetrics.advanceGlyph(gid) * advanceScale * 10) / 10;
                               skippedAdvance = 0;
                             } else {
-                              // Can't encode this char — accumulate its approximate width
-                              // for the next character's Td so spacing stays correct
-                              skippedAdvance += Math.round(advanceScale * 0.5 * 10) / 10; // ~half em for unknown chars
-                              console.log(`[ContentMap] Can't encode "${ch}" (U+${ch.charCodeAt(0).toString(16)}) — not in CMap`);
+                              skippedAdvance += Math.round(advanceScale * 0.5 * 10) / 10;
+                              console.log(`[ContentMap] Still can't encode "${ch}" (U+${ch.charCodeAt(0).toString(16)})`);
                             }
                           }
                         }
