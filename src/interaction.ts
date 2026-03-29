@@ -6,23 +6,7 @@ import type { ToolMode } from "./toolbar";
 import { pdfRectToScreenRect, screenToPdf } from "./coords";
 import type { UndoManager } from "./undo";
 import type { TextLayer } from "./text-layer";
-
-const HANDLE_SIZE = 8;
-const NOTE_ICON_SIZE = 24;
-
-const ICON_TYPES = new Set(["Text"]);
-const QUADPOINT_TYPES = new Set(["Highlight", "Underline", "StrikeOut", "Squiggly"]);
-
-// Map tool mode → MuPDF annotation type
-const TOOL_TO_ANNOT_TYPE: Record<string, string> = {
-  note: "Text",
-  freetext: "FreeText",
-  highlight: "Highlight",
-  rectangle: "Square",
-  circle: "Circle",
-  line: "Line",
-  ink: "Ink",
-};
+import { HANDLE_SIZE, NOTE_ICON_SIZE, ICON_TYPES, QUADPOINT_TYPES, TOOL_TO_ANNOT_TYPE } from "./interaction/constants";
 
 export type SelectionListener = (annotation: AnnotationDTO | null) => void;
 export type MutationListener = (annotId: string, property: string, oldValue: any, newValue: any) => void;
