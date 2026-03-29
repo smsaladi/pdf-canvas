@@ -203,12 +203,32 @@ function init() {
   document.getElementById("btn-insert-image")!.addEventListener("click", insertImage);
   document.getElementById("btn-zoom-in")!.addEventListener("click", () => viewport.setZoom(viewport.getZoom() + 0.25));
   document.getElementById("btn-zoom-out")!.addEventListener("click", () => viewport.setZoom(viewport.getZoom() - 0.25));
-  document.getElementById("btn-fit-width")!.addEventListener("click", () => viewport.fitToWidth());
-  document.getElementById("btn-fit-page")!.addEventListener("click", () => viewport.fitToPage());
-  document.getElementById("btn-rotate-cw")!.addEventListener("click", async () => {
+  // Fit width / fit height toggle
+  const fitBtn = document.getElementById("btn-fit-toggle")!;
+  const fitWidthIcon = document.getElementById("fit-width-icon")!;
+  const fitHeightIcon = document.getElementById("fit-height-icon")!;
+  fitBtn.addEventListener("click", () => {
+    const mode = fitBtn.dataset.fit;
+    if (mode === "width") {
+      viewport.fitToWidth();
+      fitBtn.dataset.fit = "height";
+      fitBtn.title = "Fit Height";
+      fitWidthIcon.style.display = "none";
+      fitHeightIcon.style.display = "";
+    } else {
+      viewport.fitToHeight();
+      fitBtn.dataset.fit = "width";
+      fitBtn.title = "Fit Width";
+      fitWidthIcon.style.display = "";
+      fitHeightIcon.style.display = "none";
+    }
+  });
+
+  // Rotate counterclockwise
+  document.getElementById("btn-rotate-ccw")!.addEventListener("click", async () => {
     if (!hasOpenDocument) return;
     const page = viewport.getCurrentPage();
-    const response = await rpc.send({ type: "rotatePage", page, angle: 90 });
+    const response = await rpc.send({ type: "rotatePage", page, angle: -90 });
     if (response.type === "pageRotated") {
       viewport.updatePageInfo(page, response.info);
       await viewport.rerenderPage(page);
