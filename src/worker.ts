@@ -575,8 +575,11 @@ self.onmessage = async function (e: MessageEvent) {
                     console.log(`[FontAugment] Parsed font: ${parsedFont.glyphs.length} glyphs, unitsPerEm=${parsedFont.unitsPerEm}`);
                     for (const ch of allNewTextChars) {
                       const glyph = parsedFont.charToGlyph(ch);
-                      if (!glyph || glyph.index === 0) {
+                      const hasOutline = glyph && glyph.path && glyph.path.commands && glyph.path.commands.length > 0;
+                      const advW = glyph ? glyph.advanceWidth : 0;
+                      if (!glyph || glyph.index === 0 || !hasOutline) {
                         missingInThisFont.push(ch);
+                        console.log(`[FontAugment]   "${ch}" (U+${ch.charCodeAt(0).toString(16).padStart(4,"0")}): index=${glyph?.index ?? "null"}, pathCmds=${glyph?.path?.commands?.length ?? 0}, advW=${advW} → MISSING`);
                       } else {
                         presentInThisFont.push(ch);
                       }
