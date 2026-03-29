@@ -482,6 +482,8 @@ One dependency. That's it.
 - [ ] Separate border/outline color and fill color selectors in toolbar (like Preview)
 - [ ] Line thickness / border width control in toolbar
 - [ ] Font family and size selector in toolbar for FreeText annotations
+- [ ] Bold/italic toggle in text editing (Ctrl+B/I) — requires mid-line font switching in content stream
+- [ ] User font selector dropdown in properties panel when editing text
 - **Tests required:**
   - [ ] E2E: Delete key removes selected annotation
   - [ ] E2E: Ctrl+S triggers save

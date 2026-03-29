@@ -343,6 +343,10 @@ export class TextLayer {
         e.preventDefault();
         this.cancelEdit();
       }
+      // Disable browser rich-text formatting (Ctrl+B/I/U) — not supported yet
+      if ((e.ctrlKey || e.metaKey) && ["b", "i", "u"].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+      }
     });
     overlay.addEventListener("blur", () => {
       // Short delay — if pointerdown fires first it will commitEdit() directly,

@@ -167,14 +167,12 @@ export class Viewport {
     this.setZoom(newScale);
   }
 
-  fitToPage(): void {
+  fitToHeight(): void {
     if (this.pages.length === 0) return;
     const curPage = this.pages[this.getCurrentPage()] || this.pages[0];
-    const availWidth = this.container.clientWidth - 32;
     const availHeight = this.container.clientHeight - 32;
-    const scaleW = availWidth / curPage.width;
-    const scaleH = availHeight / curPage.height;
-    this.setZoom(Math.min(scaleW, scaleH));
+    const newScale = availHeight / curPage.height;
+    this.setZoom(newScale);
   }
 
   /** Update a page's info (e.g. after rotation changes dimensions) */
