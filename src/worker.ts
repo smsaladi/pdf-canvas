@@ -7,6 +7,7 @@ import type { WorkerRequest, WorkerResponse, PageInfo, AnnotationDTO, TextBlock,
 import { replaceTextInStream as replaceInStream, replaceTextWithFontSwitch, parseToUnicodeCMap, replaceHexTextInStream } from "./content-stream";
 import { parseFontName, matchReferenceFont, fetchFont, augmentFont } from "./font-augment";
 import { setDoc, getDoc } from "./worker/doc-state";
+import { buildGlyphMap, findMappingsForSelection, editMappedGlyphs } from "./content-map";
 import { getPageInfo, renderPage, getAnnotations, resolveAnnot, resolveWidget } from "./worker/helpers";
 
 const respond = createWorkerResponder(self);
@@ -223,6 +224,127 @@ self.onmessage = async function (e: MessageEvent) {
         const page = getDoc().loadPage(request.page) as mupdf.PDFPage;
         const pageObj = page.getObject();
         const contentsRef = pageObj.get("Contents");
+
+        // === NEW: Deterministic mapping-based approach ===
+        const selY = (request as any).selectionY;
+        const selX = 0; // X not critical for disambiguation
+
+        if (selY !== undefined) {
+          try {
+            console.log(`[ContentMap] Building glyph map for page ${request.page}...`);
+            const glyphMap = buildGlyphMap(page);
+            console.log(`[ContentMap] Mapped ${glyphMap.length} glyphs`);
+
+            if (glyphMap.length > 0) {
+              const selection = findMappingsForSelection(glyphMap, request.oldText, selX, selY);
+              if (selection && selection.length > 0) {
+                console.log(`[ContentMap] Found "${request.oldText}" at y=${selection[0].y.toFixed(1)} (isHex=${selection[0].isHex})`);
+
+                // Read all streams
+                const streams: string[] = [];
+                if (contentsRef.isArray()) {
+                  for (let i = 0; i < contentsRef.length; i++) {
+                    const ref = contentsRef.get(i);
+                    streams.push(ref.isStream() ? ref.readStream().asString() : "");
+                  }
+                } else if (contentsRef.isStream()) {
+                  streams.push(contentsRef.readStream().asString());
+                }
+
+                // Build Unicode→GID map for hex fonts
+                let unicodeToGid: Map<string, number> | undefined;
+                if (selection[0].isHex) {
+                  const fontDict = pageObj.get("Resources")?.get("Font");
+                  if (fontDict && !fontDict.isNull()) {
+                    const fontKeys: string[] = [];
+                    fontDict.forEach((_: any, k: string | number) => fontKeys.push(String(k)));
+                    for (const fk of fontKeys) {
+                      const fo = fontDict.get(fk);
+                      const toUnicode = fo.get("ToUnicode");
+                      if (toUnicode.isStream()) {
+                        const { unicodeToGid: u2g } = parseToUnicodeCMap(toUnicode.readStream().asString());
+                        unicodeToGid = u2g;
+                        break;
+                      }
+                    }
+                  }
+                }
+
+                // For same-length replacement: edit in place
+                if (request.newText.length <= request.oldText.length) {
+                  const newChars = [...request.newText];
+                  // Pad with spaces if shorter
+                  while (newChars.length < selection.length) newChars.push(" ");
+                  const edited = editMappedGlyphs(streams, selection, newChars, unicodeToGid);
+
+                  // Write back
+                  if (contentsRef.isArray()) {
+                    for (let i = 0; i < Math.min(contentsRef.length, edited.length); i++) {
+                      const ref = contentsRef.get(i);
+                      if (ref.isStream()) ref.writeStream(edited[i]);
+                    }
+                  } else if (contentsRef.isStream()) {
+                    contentsRef.writeStream(edited[0]);
+                  }
+
+                  console.log(`[ContentMap] ✓ Edited ${selection.length} glyphs via mapping`);
+                  respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 1, method: "content-stream" });
+                  break;
+                }
+
+                // For longer text: edit existing chars + append extras (hex only)
+                if (request.newText.length > request.oldText.length && selection[0].isHex && unicodeToGid) {
+                  const existingChars = [...request.newText.slice(0, request.oldText.length)];
+                  const edited = editMappedGlyphs(streams, selection, existingChars, unicodeToGid);
+
+                  // Append extra characters after the last edited operator
+                  const lastMapping = selection[selection.length - 1];
+                  const extraChars = request.newText.slice(request.oldText.length);
+                  let extra = "";
+                  // Use advance from nearby operators
+                  const streamData = edited[lastMapping.streamIndex];
+                  const before = streamData.slice(Math.max(0, lastMapping.hexEnd - 40), lastMapping.hexEnd + 10);
+                  const tdMatch = before.match(/([\d.]+)\s+0\s+Td/);
+                  const advance = tdMatch ? parseFloat(tdMatch[1]) : 5;
+
+                  for (const ch of extraChars) {
+                    const gid = unicodeToGid.get(ch);
+                    if (gid !== undefined) {
+                      extra += `\n${advance} 0 Td <${gid.toString(16).padStart(4, "0")}> Tj`;
+                    }
+                  }
+
+                  if (extra) {
+                    // Find insertion point (after the last Tj in the stream near our edit)
+                    const afterLastEdit = streamData.slice(lastMapping.hexEnd);
+                    const tjEndMatch = afterLastEdit.match(/>\s*Tj/);
+                    const insertAt = lastMapping.hexEnd + (tjEndMatch ? tjEndMatch.index! + tjEndMatch[0].length : 5);
+                    edited[lastMapping.streamIndex] = edited[lastMapping.streamIndex].slice(0, insertAt) + extra + edited[lastMapping.streamIndex].slice(insertAt);
+                  }
+
+                  if (contentsRef.isArray()) {
+                    for (let i = 0; i < Math.min(contentsRef.length, edited.length); i++) {
+                      const ref = contentsRef.get(i);
+                      if (ref.isStream()) ref.writeStream(edited[i]);
+                    }
+                  } else if (contentsRef.isStream()) {
+                    contentsRef.writeStream(edited[0]);
+                  }
+
+                  console.log(`[ContentMap] ✓ Edited ${selection.length} + appended ${extraChars.length} glyphs via mapping`);
+                  respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 1, method: "content-stream" });
+                  break;
+                }
+              } else {
+                console.log(`[ContentMap] Selection not found in mapping, falling back`);
+              }
+            }
+          } catch (mapErr) {
+            console.warn(`[ContentMap] Mapping failed, falling back:`, mapErr);
+          }
+        }
+
+        // === FALLBACK: Old approach (for cases without selectionY or when mapping fails) ===
 
         const tryStreamReplace = (streamRef: any): boolean => {
           if (!streamRef.isStream()) return false;

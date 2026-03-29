@@ -431,6 +431,14 @@ async function applyUndo(entry: { annotId: string; property: string; previousVal
 }
 
 async function handleKeyDown(e: KeyboardEvent): Promise<void> {
+  // Escape: deselect
+  if (e.key === "Escape" && interaction.getSelectedId()) {
+    if (isEditingText()) return;
+    e.preventDefault();
+    interaction.select(null);
+    return;
+  }
+
   // Delete selected annotation
   if ((e.key === "Delete" || e.key === "Backspace") && interaction.getSelectedId()) {
     // Don't delete if we're focused on an input

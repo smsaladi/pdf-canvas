@@ -621,11 +621,15 @@ export class InteractionLayer {
         properties.borderWidth = this.currentBorderWidth;
         if (this.currentFillColor) properties.interiorColor = this.currentFillColor;
         break;
-      case "line":
+      case "line": {
         properties.color = this.currentColor;
         properties.borderWidth = this.currentBorderWidth;
-        properties.line = [[p1.x, p1.y], [p2.x, p2.y]];
+        // Use actual start/end points (not min/max sorted) to preserve line direction
+        const lineStart = screenToPdf(startScreenX, startScreenY, transform);
+        const lineEnd = screenToPdf(endX, endY, transform);
+        properties.line = [[lineStart.x, lineStart.y], [lineEnd.x, lineEnd.y]];
         break;
+      }
       case "ink":
         properties.color = this.currentColor;
         properties.borderWidth = this.currentBorderWidth;
