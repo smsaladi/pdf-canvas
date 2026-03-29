@@ -271,19 +271,34 @@ export function augmentFont(
       }
       if (currentContour.length > 0) contours.push(currentContour);
 
+      // Compute actual bounding box from contour points
+      let xMin = Infinity, yMin = Infinity, xMax = -Infinity, yMax = -Infinity;
+      for (const contour of contours) {
+        for (const pt of contour) {
+          if (pt.x < xMin) xMin = pt.x;
+          if (pt.y < yMin) yMin = pt.y;
+          if (pt.x > xMax) xMax = pt.x;
+          if (pt.y > yMax) yMax = pt.y;
+        }
+      }
+      if (!isFinite(xMin)) { xMin = 0; yMin = 0; xMax = 0; yMax = 0; }
+
+      const advW = Math.round((refGlyph.advanceWidth || 0) * scale);
+      const lsb = xMin; // left side bearing = distance from origin to leftmost contour point
+
       // Replace the glyph data at the correct index
       subsetData.glyf[glyphIndex] = {
         ...existingGlyph,
         contours,
-        advanceWidth: Math.round((refGlyph.advanceWidth || 0) * scale),
-        leftSideBearing: 0,
-        xMin: 0,
-        yMin: 0,
-        xMax: Math.round((refGlyph.advanceWidth || 0) * scale),
-        yMax: subsetUPM,
+        advanceWidth: advW,
+        leftSideBearing: lsb,
+        xMin: Math.round(xMin),
+        yMin: Math.round(yMin),
+        xMax: Math.round(xMax),
+        yMax: Math.round(yMax),
       };
 
-      console.log(`[FontAugment] Injected glyph at index ${glyphIndex} for "${char}" (${contours.length} contours, ${contours.reduce((s, c) => s + c.length, 0)} points)`);
+      console.log(`[FontAugment] Injected glyph at index ${glyphIndex} for "${char}" (${contours.length} contours, advW=${advW}, bbox=[${Math.round(xMin)},${Math.round(yMin)},${Math.round(xMax)},${Math.round(yMax)}])`);
       addedCount++;
     }
 
