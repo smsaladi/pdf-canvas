@@ -114,6 +114,7 @@ function getCharRange(
 export class TextLayer {
   private viewport: Viewport;
   private highlightElements: HTMLDivElement[] = [];
+  private hoverHighlight: HTMLDivElement | null = null;
   private editOverlay: HTMLDivElement | null = null;
   private currentSelection: TextSelection | null = null;
   private commitListeners: TextEditCommitListener[] = [];
@@ -124,6 +125,53 @@ export class TextLayer {
 
   constructor(viewport: Viewport) {
     this.viewport = viewport;
+  }
+
+  /** Show a hover highlight over the text line at the given PDF coordinates */
+  async handleHover(pageIndex: number, pdfX: number, pdfY: number): Promise<void> {
+    // Don't show hover while editing
+    if (this.editOverlay) { this.clearHover(); return; }
+
+    let data = this.viewport.getTextData(pageIndex);
+    if (!data) {
+      data = await this.viewport.extractText(pageIndex);
+      if (!data) { this.clearHover(); return; }
+    }
+
+    const hit = hitTestText(data, pdfX, pdfY);
+    if (!hit) { this.clearHover(); return; }
+
+    // Highlight the entire line containing the hit
+    const line = data.blocks[hit.block]?.lines[hit.line];
+    if (!line || line.chars.length === 0) { this.clearHover(); return; }
+
+    const scale = this.viewport.getScale();
+    const container = this.viewport.getPageContainer(pageIndex);
+    if (!container) { this.clearHover(); return; }
+
+    const bbox = line.bbox;
+    const screen = pdfRectToScreenRect(bbox, { scale, pageOffsetX: 0, pageOffsetY: 0 });
+
+    if (!this.hoverHighlight) {
+      this.hoverHighlight = document.createElement("div");
+      this.hoverHighlight.className = "text-hover-highlight";
+    }
+
+    this.hoverHighlight.style.left = `${screen.x}px`;
+    this.hoverHighlight.style.top = `${screen.y}px`;
+    this.hoverHighlight.style.width = `${screen.width}px`;
+    this.hoverHighlight.style.height = `${screen.height}px`;
+
+    if (this.hoverHighlight.parentElement !== container) {
+      container.appendChild(this.hoverHighlight);
+    }
+  }
+
+  clearHover(): void {
+    if (this.hoverHighlight) {
+      this.hoverHighlight.remove();
+      this.hoverHighlight = null;
+    }
   }
 
   onCommit(listener: TextEditCommitListener): () => void {

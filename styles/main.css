@@ -632,6 +632,15 @@ body {
   z-index: 3;
 }
 
+.text-hover-highlight {
+  position: absolute;
+  background: rgba(74, 158, 255, 0.08);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 3;
+  transition: all 0.05s;
+}
+
 .text-selection-highlight {
   position: absolute;
   background: rgba(74, 158, 255, 0.3);
@@ -803,8 +812,7 @@ body {
   flex-wrap: wrap;
   height: auto;
   min-height: var(--toolbar-height);
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: visible;
 }
 
 /* Hide text labels on toolbar buttons when narrow */

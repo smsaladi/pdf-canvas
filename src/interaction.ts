@@ -101,6 +101,11 @@ export class InteractionLayer {
     }
   }
 
+  /** Whether the current tool allows selecting/interacting with existing items */
+  private canSelect(): boolean {
+    return this.currentTool === "select" || this.currentTool === "textedit";
+  }
+
   onSelectionChange(listener: SelectionListener): () => void {
     this.selectionListeners.push(listener);
     return () => { this.selectionListeners = this.selectionListeners.filter((l) => l !== listener); };
@@ -217,21 +222,28 @@ export class InteractionLayer {
   }
 
   private onPointerMove(e: PointerEvent): void {
-    // Handle text edit drag selection
+    // Handle text hover/drag for textedit mode
     if (this.currentTool === "textedit" && this.textLayer) {
-      // Find which page container the mouse is over
       for (const [pageIndex, container] of this.overlayContainers) {
         const rect = container.getBoundingClientRect();
         if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
           const screenX = e.clientX - rect.left;
           const screenY = e.clientY - rect.top;
           const scale = this.viewport.getScale();
-          this.textLayer.handlePointerMove(pageIndex, screenX / scale, screenY / scale);
+          const pdfX = screenX / scale;
+          const pdfY = screenY / scale;
+          // Show text line hover highlight
+          this.textLayer.handleHover(pageIndex, pdfX, pdfY);
+          // Handle drag selection if active
+          this.textLayer.handlePointerMove(pageIndex, pdfX, pdfY);
           break;
         }
       }
       return;
     }
+
+    // Clear text hover when not in textedit mode
+    if (this.textLayer) this.textLayer.clearHover();
 
     // Handle creation drag — update live SVG preview
     if (this.creationState) {
@@ -945,6 +957,7 @@ export class InteractionLayer {
       div.title = `${widget.fieldType}: ${widget.fieldName}`;
 
       div.addEventListener("pointerdown", (e) => {
+        if (!this.canSelect()) return;
         e.stopPropagation();
         this.select(widget.id);
         if (!(e.target as HTMLElement).classList.contains("resize-handle")) {
@@ -989,6 +1002,7 @@ export class InteractionLayer {
       div.title = `Image (${img.width}×${img.height})`;
 
       div.addEventListener("pointerdown", (e) => {
+        if (!this.canSelect()) return;
         e.stopPropagation();
         this.select(img.id);
       });
@@ -1045,6 +1059,7 @@ export class InteractionLayer {
     }
 
     div.addEventListener("pointerdown", (e) => {
+      if (!this.canSelect()) return; // Only select/textedit tools interact with overlays
       e.stopPropagation();
       // Don't start drag if we're inline editing this annotation
       if (this.activeInlineEdit?.annotId === annot.id && (e.target as HTMLElement).classList.contains("freetext-inline-edit")) return;
@@ -1111,6 +1126,7 @@ export class InteractionLayer {
     div.title = annot.contents || annot.type;
 
     div.addEventListener("pointerdown", (e) => {
+      if (!this.canSelect()) return;
       e.stopPropagation();
       this.select(annot.id);
       this.startDrag(annot.id, e, null);
