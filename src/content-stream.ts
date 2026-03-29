@@ -524,6 +524,7 @@ export function replaceHexTextInStream(
   newText: string,
   gidToUnicode: Map<number, string>,
   unicodeToGid: Map<string, number>,
+  lineContext?: string,
 ): { result: string; count: number; missingChars: string[] } {
   // Find all hex Tj operators and their positions
   const hexPattern = /<([0-9A-Fa-f]{4})>\s*Tj/g;
@@ -548,15 +549,42 @@ export function replaceHexTextInStream(
     if (!unicodeToGid.has(ch)) missingChars.push(ch);
   }
 
-  // Find the old text as a VERIFIED consecutive sequence of hex operators.
-  // Each hex operator must decode to the expected character.
-  let matchStartIdx = -1;
+  // Find ALL occurrences of the old text as verified consecutive hex operators
+  const allMatches: number[] = [];
   for (let startI = 0; startI <= hexOps.length - oldText.length; startI++) {
     let matched = true;
     for (let j = 0; j < oldText.length; j++) {
       if (hexOps[startI + j].char !== oldText[j]) { matched = false; break; }
     }
-    if (matched) { matchStartIdx = startI; break; }
+    if (matched) allMatches.push(startI);
+  }
+
+  if (allMatches.length === 0) return { result: stream, count: 0, missingChars };
+
+  // Pick the right occurrence using line context for disambiguation
+  let matchStartIdx = allMatches[0]; // default to first
+  if (lineContext && allMatches.length > 1) {
+    // For each match, check how much surrounding text matches the line context
+    let bestScore = -1;
+    for (const startI of allMatches) {
+      // Build surrounding text (20 chars before and after the match)
+      const contextStart = Math.max(0, startI - 20);
+      const contextEnd = Math.min(hexOps.length, startI + oldText.length + 20);
+      const surrounding = hexOps.slice(contextStart, contextEnd).map(op => op.char).join("");
+      // Score: how much of lineContext appears in the surrounding text
+      let score = 0;
+      for (let len = lineContext.length; len >= 3; len--) {
+        for (let pos = 0; pos <= lineContext.length - len; pos++) {
+          if (surrounding.includes(lineContext.substring(pos, pos + len))) {
+            score = len;
+            break;
+          }
+        }
+        if (score > 0) break;
+      }
+      if (score > bestScore) { bestScore = score; matchStartIdx = startI; }
+    }
+    console.log(`[Type0] Found ${allMatches.length} occurrences of "${oldText}", selected match at index ${matchStartIdx} (context score: ${bestScore})`);
   }
 
   if (matchStartIdx === -1) return { result: stream, count: 0, missingChars };
@@ -595,15 +623,22 @@ export function replaceHexTextInStream(
     const tjEnd = afterLastOp.match(/>\s*Tj/);
     const insertPoint = lastOp.hexEnd + (tjEnd ? tjEnd.index! + tjEnd[0].length : 5);
 
-    // Calculate average character advance from nearby Td operators
-    let avgAdvance = 5; // default
-    const nearbyTds: number[] = [];
-    for (let i = Math.max(0, matchStartIdx - 3); i < Math.min(hexOps.length, matchStartIdx + oldText.length + 3); i++) {
-      const before = stream.slice(Math.max(0, hexOps[i].hexStart - 30), hexOps[i].hexStart);
-      const tdMatch = before.match(/([\d.]+)\s+0\s+Td\s*$/);
-      if (tdMatch) nearbyTds.push(parseFloat(tdMatch[1]));
+    // Calculate character advance from the LAST character in the matched text
+    // (this gives us the advance width used in this specific text run)
+    let charAdvance = 5; // default
+    const lastMatchedOp = hexOps[matchStartIdx + oldText.length - 1];
+    const beforeLast = stream.slice(Math.max(0, lastMatchedOp.hexStart - 40), lastMatchedOp.hexStart);
+    const lastTdMatch = beforeLast.match(/([\d.]+)\s+0\s+Td\s*$/);
+    if (lastTdMatch) {
+      charAdvance = parseFloat(lastTdMatch[1]);
+    } else {
+      // Try any Td in the matched range
+      for (let i = matchStartIdx + oldText.length - 1; i >= matchStartIdx; i--) {
+        const before = stream.slice(Math.max(0, hexOps[i].hexStart - 40), hexOps[i].hexStart);
+        const tdM = before.match(/([\d.]+)\s+0\s+Td\s*$/);
+        if (tdM) { charAdvance = parseFloat(tdM[1]); break; }
+      }
     }
-    if (nearbyTds.length > 0) avgAdvance = Math.round(nearbyTds.reduce((a, b) => a + b, 0) / nearbyTds.length);
 
     // Build the extra operators
     let extra = "";
@@ -611,7 +646,7 @@ export function replaceHexTextInStream(
       const gid = unicodeToGid.get(newText[i]);
       if (gid !== undefined) {
         const hex = gid.toString(16).padStart(4, "0");
-        extra += `\n${avgAdvance} 0 Td <${hex}> Tj`;
+        extra += `\n${charAdvance} 0 Td <${hex}> Tj`;
       }
     }
 

@@ -406,6 +406,19 @@ export class TextLayer {
     const page = this.currentSelection.page;
     const selection = this.currentSelection;
 
+    // Build extended context: include chars from the same line before/after selection
+    // This helps disambiguate when the same word appears multiple times
+    const data = this.viewport.getTextData(page);
+    let lineContext = "";
+    if (data && selection.chars.length > 0) {
+      const firstChar = selection.chars[0];
+      const line = data.blocks[firstChar.block]?.lines[firstChar.line];
+      if (line) {
+        lineContext = line.chars.map(c => c.c).join("");
+      }
+    }
+    (selection as any)._lineContext = lineContext;
+
     this.editOverlay.remove();
     this.editOverlay = null;
     this.clearHighlights();

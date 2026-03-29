@@ -88,9 +88,10 @@ function init() {
 
   // Wire text edit commits
   textLayer.onCommit(async (page, oldText, newText, selection, styleOverride) => {
-    // Get the font name from the first selected character
+    // Get the font name and line context for disambiguation
     const selFontName = selection.chars[0]?.info.fontName || undefined;
-    console.log(`[TextEdit] Replacing "${oldText}" → "${newText}" on page ${page} (font: ${selFontName || "unknown"})`);
+    const lineContext = (selection as any)._lineContext || "";
+    console.log(`[TextEdit] Replacing "${oldText}" → "${newText}" on page ${page} (font: ${selFontName || "unknown"}, context: "${lineContext.substring(0, 40)}")`);
     const response = await rpc.send({
       type: "replaceTextSmart",
       page,
@@ -99,7 +100,8 @@ function init() {
       boldOverride: styleOverride?.bold,
       italicOverride: styleOverride?.italic,
       fontName: selFontName,
-    });
+      lineContext,
+    } as any);
 
     if (response.type === "textReplacedSmart") {
       if (response.count > 0) {

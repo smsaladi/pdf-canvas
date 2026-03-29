@@ -359,9 +359,10 @@ self.onmessage = async function (e: MessageEvent) {
               const { gidToUnicode, unicodeToGid } = parseToUnicodeCMap(toUnicode.readStream().asString());
               console.log(`[Type0] Parsed CMap for "${bfn}": ${gidToUnicode.size} mappings`);
 
+              const lineCtx = (request as any).lineContext || "";
               const tryHex = (ref: any): boolean => {
                 if (!ref.isStream()) return false;
-                const { result, count, missingChars } = replaceHexTextInStream(ref.readStream().asString(), request.oldText, request.newText, gidToUnicode, unicodeToGid);
+                const { result, count, missingChars } = replaceHexTextInStream(ref.readStream().asString(), request.oldText, request.newText, gidToUnicode, unicodeToGid, lineCtx);
                 if (missingChars.length > 0) console.log(`[Type0] Missing chars: ${missingChars.join(", ")}`);
                 if (count > 0) { ref.writeStream(result); return true; }
                 return false;
