@@ -238,6 +238,8 @@ export class InteractionLayer {
       this.creationState.lastY = y;
 
       if (pathEl) {
+        let cx = x, cy = y;
+
         switch (tool) {
           case "ink":
             if (this.creationState.inkPoints) {
@@ -247,22 +249,52 @@ export class InteractionLayer {
             }
             break;
           case "line":
-            pathEl.setAttribute("x2", String(x));
-            pathEl.setAttribute("y2", String(y));
+            if (e.shiftKey) {
+              // Snap to nearest 45-degree angle
+              const dx = x - sx, dy = y - sy;
+              const angle = Math.atan2(dy, dx);
+              const snapped = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              cx = sx + Math.cos(snapped) * dist;
+              cy = sy + Math.sin(snapped) * dist;
+            }
+            pathEl.setAttribute("x2", String(cx));
+            pathEl.setAttribute("y2", String(cy));
+            this.creationState.lastX = cx;
+            this.creationState.lastY = cy;
             break;
           case "circle":
-            pathEl.setAttribute("cx", String((sx + x) / 2));
-            pathEl.setAttribute("cy", String((sy + y) / 2));
-            pathEl.setAttribute("rx", String(Math.abs(x - sx) / 2));
-            pathEl.setAttribute("ry", String(Math.abs(y - sy) / 2));
+            if (e.shiftKey) {
+              // Perfect circle: use max dimension for both axes
+              const size = Math.max(Math.abs(x - sx), Math.abs(y - sy));
+              cx = sx + size * Math.sign(x - sx);
+              cy = sy + size * Math.sign(y - sy);
+            }
+            pathEl.setAttribute("cx", String((sx + cx) / 2));
+            pathEl.setAttribute("cy", String((sy + cy) / 2));
+            pathEl.setAttribute("rx", String(Math.abs(cx - sx) / 2));
+            pathEl.setAttribute("ry", String(Math.abs(cy - sy) / 2));
+            this.creationState.lastX = cx;
+            this.creationState.lastY = cy;
             break;
-          default:
+          default: {
             // rectangle, freetext, highlight
-            pathEl.setAttribute("x", String(Math.min(sx, x)));
-            pathEl.setAttribute("y", String(Math.min(sy, y)));
-            pathEl.setAttribute("width", String(Math.abs(x - sx)));
-            pathEl.setAttribute("height", String(Math.abs(y - sy)));
+            let w = Math.abs(x - sx), h = Math.abs(y - sy);
+            if (e.shiftKey && tool === "rectangle") {
+              // Perfect square
+              const size = Math.max(w, h);
+              w = size; h = size;
+            }
+            const rx = x < sx ? sx - w : sx;
+            const ry = y < sy ? sy - h : sy;
+            pathEl.setAttribute("x", String(rx));
+            pathEl.setAttribute("y", String(ry));
+            pathEl.setAttribute("width", String(w));
+            pathEl.setAttribute("height", String(h));
+            this.creationState.lastX = x < sx ? sx - w : sx + w;
+            this.creationState.lastY = y < sy ? sy - h : sy + h;
             break;
+          }
         }
       }
       return;
@@ -274,14 +306,19 @@ export class InteractionLayer {
     const el = this.overlayElements.get(annotId);
     if (!el) return;
 
-    const dx = e.clientX - startScreenX;
-    const dy = e.clientY - startScreenY;
+    let dx = e.clientX - startScreenX;
+    let dy = e.clientY - startScreenY;
 
     if (handle === null) {
+      // Shift: constrain to horizontal or vertical axis
+      if (e.shiftKey) {
+        if (Math.abs(dx) > Math.abs(dy)) dy = 0;
+        else dx = 0;
+      }
       el.style.left = `${originalLeft + dx}px`;
       el.style.top = `${originalTop + dy}px`;
     } else {
-      this.applyResize(el, handle, dx, dy, originalLeft, originalTop, originalWidth, originalHeight);
+      this.applyResize(el, handle, dx, dy, originalLeft, originalTop, originalWidth, originalHeight, e.shiftKey);
     }
   }
 
@@ -367,7 +404,8 @@ export class InteractionLayer {
 
   private applyResize(
     el: HTMLDivElement, handle: string, dx: number, dy: number,
-    origLeft: number, origTop: number, origWidth: number, origHeight: number
+    origLeft: number, origTop: number, origWidth: number, origHeight: number,
+    shiftKey = false
   ): void {
     let newLeft = origLeft, newTop = origTop, newWidth = origWidth, newHeight = origHeight;
 
@@ -375,6 +413,25 @@ export class InteractionLayer {
     if (handle.includes("e")) { newWidth = origWidth + dx; }
     if (handle.includes("n")) { newTop = origTop + dy; newHeight = origHeight - dy; }
     if (handle.includes("s")) { newHeight = origHeight + dy; }
+
+    // Shift: maintain aspect ratio
+    if (shiftKey && origWidth > 0 && origHeight > 0) {
+      const aspect = origWidth / origHeight;
+      if (handle.length === 2) {
+        // Corner handle: use the larger dimension change
+        if (Math.abs(newWidth - origWidth) > Math.abs(newHeight - origHeight)) {
+          newHeight = newWidth / aspect;
+        } else {
+          newWidth = newHeight * aspect;
+        }
+        if (handle.includes("n")) newTop = origTop + origHeight - newHeight;
+        if (handle.includes("w")) newLeft = origLeft + origWidth - newWidth;
+      } else {
+        // Edge handle: adjust the other dimension
+        if (handle === "e" || handle === "w") newHeight = newWidth / aspect;
+        else newWidth = newHeight * aspect;
+      }
+    }
 
     // Enforce minimums
     if (newWidth < 10) { newWidth = 10; if (handle.includes("w")) newLeft = origLeft + origWidth - 10; }

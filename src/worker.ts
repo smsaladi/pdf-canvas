@@ -297,26 +297,72 @@ self.onmessage = async function (e: MessageEvent) {
                   const existingChars = [...request.newText.slice(0, request.oldText.length)];
                   const edited = editMappedGlyphs(streams, selection, existingChars, unicodeToGid);
 
-                  // Append extra characters after the last edited operator
+                  // Append extra characters with per-character advance widths
                   const lastMapping = selection[selection.length - 1];
                   const extraChars = request.newText.slice(request.oldText.length);
                   let extra = "";
-                  // Use advance from nearby operators
-                  const streamData = edited[lastMapping.streamIndex];
-                  const before = streamData.slice(Math.max(0, lastMapping.hexEnd - 40), lastMapping.hexEnd + 10);
-                  const tdMatch = before.match(/([\d.]+)\s+0\s+Td/);
-                  const advance = tdMatch ? parseFloat(tdMatch[1]) : 5;
 
+                  // Load the font to get per-glyph advance widths
+                  let fontForMetrics: mupdf.Font | null = null;
+                  let fontSize = 8; // default
+                  try {
+                    const fDict = pageObj.get("Resources")?.get("Font");
+                    if (fDict && !fDict.isNull()) {
+                      const fKeys: string[] = [];
+                      fDict.forEach((_: any, k: string | number) => fKeys.push(String(k)));
+                      for (const fk of fKeys) {
+                        const fo = fDict.get(fk);
+                        if (fo.get("Subtype").asName() === "Type0") {
+                          const desc = fo.get("DescendantFonts");
+                          if (desc.isArray() && desc.length > 0) {
+                            const cidFont = desc.get(0);
+                            const fontDesc = cidFont.get("FontDescriptor");
+                            if (!fontDesc.isNull()) {
+                              const ff2 = fontDesc.get("FontFile2");
+                              if (ff2.isStream()) {
+                                const fontData = ff2.readStream().asUint8Array();
+                                const buf = new ArrayBuffer(fontData.byteLength);
+                                new Uint8Array(buf).set(fontData);
+                                fontForMetrics = new mupdf.Font("metrics", buf);
+                              }
+                            }
+                          }
+                          break;
+                        }
+                      }
+                    }
+                    // Get font size from the stream's Tf operator near the selection
+                    const streamData = edited[lastMapping.streamIndex];
+                    const beforeEdit = streamData.slice(Math.max(0, lastMapping.hexStart - 200), lastMapping.hexStart);
+                    const tfMatch = beforeEdit.match(/\/\S+\s+([\d.]+)\s+Tf/g);
+                    if (tfMatch) {
+                      const lastTf = tfMatch[tfMatch.length - 1];
+                      const sizeMatch = lastTf.match(/([\d.]+)\s+Tf/);
+                      if (sizeMatch) fontSize = parseFloat(sizeMatch[1]);
+                    }
+                  } catch {}
+
+                  let missingCharsLogged = false;
                   for (const ch of extraChars) {
                     const gid = unicodeToGid.get(ch);
                     if (gid !== undefined) {
+                      // Compute per-character advance width
+                      let advance = 5; // fallback
+                      if (fontForMetrics) {
+                        // advanceGlyph returns width as fraction of em square
+                        const glyphAdvance = fontForMetrics.advanceGlyph(gid);
+                        advance = Math.round(glyphAdvance * fontSize * 10) / 10;
+                      }
                       extra += `\n${advance} 0 Td <${gid.toString(16).padStart(4, "0")}> Tj`;
+                    } else if (!missingCharsLogged) {
+                      console.log(`[ContentMap] Can't encode "${ch}" (U+${ch.charCodeAt(0).toString(16)}) — not in ToUnicode CMap`);
+                      missingCharsLogged = true;
                     }
                   }
 
                   if (extra) {
                     // Find insertion point (after the last Tj in the stream near our edit)
-                    const afterLastEdit = streamData.slice(lastMapping.hexEnd);
+                    const afterLastEdit = edited[lastMapping.streamIndex].slice(lastMapping.hexEnd);
                     const tjEndMatch = afterLastEdit.match(/>\s*Tj/);
                     const insertAt = lastMapping.hexEnd + (tjEndMatch ? tjEndMatch.index! + tjEndMatch[0].length : 5);
                     edited[lastMapping.streamIndex] = edited[lastMapping.streamIndex].slice(0, insertAt) + extra + edited[lastMapping.streamIndex].slice(insertAt);
