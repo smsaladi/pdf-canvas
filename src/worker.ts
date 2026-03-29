@@ -297,66 +297,108 @@ self.onmessage = async function (e: MessageEvent) {
                   const existingChars = [...request.newText.slice(0, request.oldText.length)];
                   const edited = editMappedGlyphs(streams, selection, existingChars, unicodeToGid);
 
-                  // Append extra characters with per-character advance widths
                   const lastMapping = selection[selection.length - 1];
                   const extraChars = request.newText.slice(request.oldText.length);
                   let extra = "";
 
-                  // Load the font to get per-glyph advance widths
-                  let fontForMetrics: mupdf.Font | null = null;
-                  let fontSize = 8; // default
+                  // === CALIBRATED ADVANCE WIDTHS ===
+                  // Use the Device trace (glyphMap) to compute a calibration factor.
+                  // The trace gives us actual x-positions. The Td values in the content
+                  // stream should produce those same positions. By comparing known advances
+                  // from the trace with font.advanceGlyph() values, we get a scale factor
+                  // that accounts for fontSize, CTM, and any other transforms.
+
+                  let advanceScale = 5; // fallback: raw Td value per em-unit of advance
                   try {
-                    const fDict = pageObj.get("Resources")?.get("Font");
-                    if (fDict && !fDict.isNull()) {
-                      const fKeys: string[] = [];
-                      fDict.forEach((_: any, k: string | number) => fKeys.push(String(k)));
-                      for (const fk of fKeys) {
-                        const fo = fDict.get(fk);
-                        if (fo.get("Subtype").asName() === "Type0") {
-                          const desc = fo.get("DescendantFonts");
-                          if (desc.isArray() && desc.length > 0) {
-                            const cidFont = desc.get(0);
-                            const fontDesc = cidFont.get("FontDescriptor");
-                            if (!fontDesc.isNull()) {
-                              const ff2 = fontDesc.get("FontFile2");
-                              if (ff2.isStream()) {
-                                const fontData = ff2.readStream().asUint8Array();
-                                const buf = new ArrayBuffer(fontData.byteLength);
-                                new Uint8Array(buf).set(fontData);
-                                fontForMetrics = new mupdf.Font("metrics", buf);
+                    // Find the selection in the glyph map and compute actual inter-character advances
+                    const selStart = glyphMap.findIndex(g =>
+                      Math.abs(g.y - selection[0].y) < 1 && g.char === selection[0].char
+                    );
+                    if (selStart >= 0 && selStart + 1 < glyphMap.length) {
+                      // Compute actual advances from consecutive glyphs in the trace
+                      const advances: Array<{ actual: number; fontAdvance: number }> = [];
+                      for (let gi = selStart; gi < Math.min(selStart + selection.length - 1, glyphMap.length - 1); gi++) {
+                        const curr = glyphMap[gi];
+                        const next = glyphMap[gi + 1];
+                        if (Math.abs(curr.y - next.y) < 1) { // same line
+                          const actualAdv = next.x - curr.x;
+                          if (actualAdv > 0 && actualAdv < 50) { // reasonable range
+                            advances.push({ actual: actualAdv, fontAdvance: 1 }); // we'll compute ratio per-glyph
+                          }
+                        }
+                      }
+
+                      // Compute the ratio: Td value = actual advance from trace
+                      // For appended chars: Td = font.advanceGlyph(gid) * advanceScale
+                      // advanceScale = average(actual advance / advanceGlyph) for known chars
+                      if (advances.length > 0) {
+                        // Load font for advanceGlyph
+                        let fontForMetrics: mupdf.Font | null = null;
+                        const fDict = pageObj.get("Resources")?.get("Font");
+                        if (fDict && !fDict.isNull()) {
+                          const fKeys: string[] = [];
+                          fDict.forEach((_: any, k: string | number) => fKeys.push(String(k)));
+                          for (const fk of fKeys) {
+                            const fo = fDict.get(fk);
+                            if (fo.get("Subtype").asName() === "Type0") {
+                              const desc = fo.get("DescendantFonts");
+                              if (desc.isArray() && desc.length > 0) {
+                                const ff2 = desc.get(0).get("FontDescriptor")?.get("FontFile2");
+                                if (ff2?.isStream()) {
+                                  const fd = ff2.readStream().asUint8Array();
+                                  const buf = new ArrayBuffer(fd.byteLength);
+                                  new Uint8Array(buf).set(fd);
+                                  fontForMetrics = new mupdf.Font("metrics", buf);
+                                }
+                              }
+                              break;
+                            }
+                          }
+                        }
+
+                        if (fontForMetrics) {
+                          const ratios: number[] = [];
+                          for (let gi = selStart; gi < Math.min(selStart + selection.length - 1, glyphMap.length - 1); gi++) {
+                            const curr = glyphMap[gi];
+                            const next = glyphMap[gi + 1];
+                            if (Math.abs(curr.y - next.y) < 1) {
+                              const actualAdv = next.x - curr.x;
+                              const fontAdv = fontForMetrics.advanceGlyph(curr.glyphId);
+                              if (fontAdv > 0.01 && actualAdv > 0) {
+                                ratios.push(actualAdv / fontAdv);
                               }
                             }
                           }
-                          break;
+                          if (ratios.length > 0) {
+                            advanceScale = ratios.reduce((a, b) => a + b, 0) / ratios.length;
+                            console.log(`[ContentMap] Calibrated advanceScale=${advanceScale.toFixed(2)} from ${ratios.length} samples`);
+                          }
+
+                          // Generate appended operators with calibrated advances
+                          for (const ch of extraChars) {
+                            const gid = unicodeToGid.get(ch);
+                            if (gid !== undefined) {
+                              const fontAdv = fontForMetrics.advanceGlyph(gid);
+                              const advance = Math.round(fontAdv * advanceScale * 10) / 10;
+                              extra += `\n${advance} 0 Td <${gid.toString(16).padStart(4, "0")}> Tj`;
+                            } else {
+                              console.log(`[ContentMap] Can't encode "${ch}" (U+${ch.charCodeAt(0).toString(16)}) — not in CMap`);
+                            }
+                          }
                         }
                       }
                     }
-                    // Get font size from the stream's Tf operator near the selection
-                    const streamData = edited[lastMapping.streamIndex];
-                    const beforeEdit = streamData.slice(Math.max(0, lastMapping.hexStart - 200), lastMapping.hexStart);
-                    const tfMatch = beforeEdit.match(/\/\S+\s+([\d.]+)\s+Tf/g);
-                    if (tfMatch) {
-                      const lastTf = tfMatch[tfMatch.length - 1];
-                      const sizeMatch = lastTf.match(/([\d.]+)\s+Tf/);
-                      if (sizeMatch) fontSize = parseFloat(sizeMatch[1]);
-                    }
-                  } catch {}
+                  } catch (advErr) {
+                    console.warn("[ContentMap] Advance calibration failed:", advErr);
+                  }
 
-                  let missingCharsLogged = false;
-                  for (const ch of extraChars) {
-                    const gid = unicodeToGid.get(ch);
-                    if (gid !== undefined) {
-                      // Compute per-character advance width
-                      let advance = 5; // fallback
-                      if (fontForMetrics) {
-                        // advanceGlyph returns width as fraction of em square
-                        const glyphAdvance = fontForMetrics.advanceGlyph(gid);
-                        advance = Math.round(glyphAdvance * fontSize * 10) / 10;
+                  // Fallback: if calibration didn't produce results, use fixed advance
+                  if (!extra && extraChars.length > 0) {
+                    for (const ch of extraChars) {
+                      const gid = unicodeToGid.get(ch);
+                      if (gid !== undefined) {
+                        extra += `\n5 0 Td <${gid.toString(16).padStart(4, "0")}> Tj`;
                       }
-                      extra += `\n${advance} 0 Td <${gid.toString(16).padStart(4, "0")}> Tj`;
-                    } else if (!missingCharsLogged) {
-                      console.log(`[ContentMap] Can't encode "${ch}" (U+${ch.charCodeAt(0).toString(16)}) — not in ToUnicode CMap`);
-                      missingCharsLogged = true;
                     }
                   }
 

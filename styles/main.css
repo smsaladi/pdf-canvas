@@ -389,6 +389,25 @@ body {
   color: var(--text-primary);
 }
 
+.props-coord-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-right: 2px;
+  min-width: 10px;
+}
+
+.props-coord-input {
+  width: 58px;
+  font-size: 12px;
+  font-family: monospace;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  margin-right: 6px;
+}
+
 .props-color {
   width: 32px;
   height: 24px;

@@ -81,11 +81,14 @@ export class PropertiesPanel {
     let html = `<div class="props-content">`;
     html += `<h3 class="props-type">${escapeHtml(annot.type)}</h3>`;
 
-    // Position
+    // Position (editable)
+    const w = annot.rect[2] - annot.rect[0], h = annot.rect[3] - annot.rect[1];
     html += `<div class="props-section">`;
     html += `<label class="props-label">Position</label>`;
-    html += `<div class="props-row"><span class="props-coord">x: ${annot.rect[0].toFixed(1)}</span><span class="props-coord">y: ${annot.rect[1].toFixed(1)}</span></div>`;
-    html += `<div class="props-row"><span class="props-coord">w: ${(annot.rect[2] - annot.rect[0]).toFixed(1)}</span><span class="props-coord">h: ${(annot.rect[3] - annot.rect[1]).toFixed(1)}</span></div>`;
+    html += `<div class="props-row"><label class="props-coord-label">x</label><input type="number" class="props-coord-input" data-prop="posX" step="1" value="${annot.rect[0].toFixed(1)}" />`;
+    html += `<label class="props-coord-label">y</label><input type="number" class="props-coord-input" data-prop="posY" step="1" value="${annot.rect[1].toFixed(1)}" /></div>`;
+    html += `<div class="props-row"><label class="props-coord-label">w</label><input type="number" class="props-coord-input" data-prop="posW" step="1" min="1" value="${w.toFixed(1)}" />`;
+    html += `<label class="props-coord-label">h</label><input type="number" class="props-coord-input" data-prop="posH" step="1" min="1" value="${h.toFixed(1)}" /></div>`;
     html += `</div>`;
 
     // Color
@@ -173,6 +176,18 @@ export class PropertiesPanel {
   }
 
   private bindInputEvents(): void {
+    // Position (x, y, w, h)
+    const posHandler = () => {
+      if (!this.annotation) return;
+      const getVal = (prop: string) => parseFloat((this.container.querySelector<HTMLInputElement>(`[data-prop="${prop}"]`) as HTMLInputElement)?.value || "0");
+      const x = getVal("posX"), y = getVal("posY"), w = getVal("posW"), h = getVal("posH");
+      const newRect: [number, number, number, number] = [x, y, x + w, y + h];
+      this.emitChange("rect", newRect, this.annotation.rect);
+    };
+    for (const prop of ["posX", "posY", "posW", "posH"]) {
+      this.container.querySelector<HTMLInputElement>(`[data-prop="${prop}"]`)?.addEventListener("change", posHandler);
+    }
+
     // Color
     this.container.querySelector<HTMLInputElement>('[data-prop="color"]')?.addEventListener("change", (e) => {
       const hex = (e.target as HTMLInputElement).value;

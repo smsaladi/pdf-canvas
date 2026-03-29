@@ -133,6 +133,7 @@ export class InteractionLayer {
       const prev = this.overlayElements.get(this.selectedId);
       if (prev) {
         prev.classList.remove("selected");
+        prev.style.cursor = "";
         this.removeHandles(prev);
       }
     }
@@ -143,6 +144,7 @@ export class InteractionLayer {
       const el = this.overlayElements.get(annotId);
       if (el) {
         el.classList.add("selected");
+        el.style.cursor = "move";
         this.addHandles(el);
       }
     }
@@ -1012,6 +1014,19 @@ export class InteractionLayer {
       div.addEventListener("dblclick", (e) => {
         e.stopPropagation();
         this.startInlineEdit(annot.id);
+      });
+    }
+
+    // Double-click sticky note to focus comment textarea in properties panel
+    if (annot.type === "Text") {
+      div.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        // Trigger selection listeners so properties panel shows, then focus textarea
+        for (const listener of this.selectionListeners) listener(annot);
+        requestAnimationFrame(() => {
+          const textarea = document.querySelector<HTMLTextAreaElement>('[data-prop="contents"]');
+          if (textarea) textarea.focus();
+        });
       });
     }
 

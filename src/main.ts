@@ -320,6 +320,43 @@ function init() {
   // Keyboard shortcuts
   document.addEventListener("keydown", handleKeyDown);
 
+  // Space bar pan: hold Space to drag-pan the viewport
+  let isPanning = false;
+  let panStart = { x: 0, y: 0, scrollLeft: 0, scrollTop: 0 };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === " " && !isEditingText() && !isPanning) {
+      e.preventDefault();
+      isPanning = true;
+      viewportEl.style.cursor = "grab";
+      interaction.setTool("select"); // suppress creation tools during pan
+    }
+  });
+  document.addEventListener("keyup", (e) => {
+    if (e.key === " " && isPanning) {
+      isPanning = false;
+      viewportEl.style.cursor = "";
+    }
+  });
+  viewportEl.addEventListener("pointerdown", (e) => {
+    if (isPanning) {
+      e.preventDefault();
+      e.stopPropagation();
+      viewportEl.style.cursor = "grabbing";
+      panStart = { x: e.clientX, y: e.clientY, scrollLeft: viewportEl.scrollLeft, scrollTop: viewportEl.scrollTop };
+      const onMove = (ev: PointerEvent) => {
+        viewportEl.scrollLeft = panStart.scrollLeft - (ev.clientX - panStart.x);
+        viewportEl.scrollTop = panStart.scrollTop - (ev.clientY - panStart.y);
+      };
+      const onUp = () => {
+        viewportEl.style.cursor = "grab";
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+      };
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+    }
+  }, true); // capture phase to intercept before interaction layer
+
   // Warn before losing work
   window.addEventListener("beforeunload", (e) => {
     if (hasOpenDocument) e.preventDefault();
@@ -330,6 +367,9 @@ function init() {
 
 async function applyPropertyChange(annotId: string, property: string, value: any): Promise<void> {
   switch (property) {
+    case "rect":
+      await rpc.send({ type: "setAnnotRect", annotId, rect: value });
+      break;
     case "color":
       await rpc.send({ type: "setAnnotColor", annotId, color: value });
       break;
@@ -499,18 +539,60 @@ async function handleKeyDown(e: KeyboardEvent): Promise<void> {
     }
   }
 
-  // Arrow keys: nudge selected annotation by 1pt
+  // Duplicate: Ctrl+D
+  if ((e.ctrlKey || e.metaKey) && e.key === "d") {
+    e.preventDefault();
+    if (interaction.getSelectedId()) {
+      await duplicateSelected();
+    }
+    return;
+  }
+
+  // Copy: Ctrl+C (annotation, not text)
+  if ((e.ctrlKey || e.metaKey) && e.key === "c" && !isEditingText()) {
+    const annot = interaction.getSelectedAnnotation();
+    if (annot) {
+      e.preventDefault();
+      clipboardAnnot = { ...annot };
+    }
+    return;
+  }
+
+  // Paste: Ctrl+V (annotation)
+  if ((e.ctrlKey || e.metaKey) && e.key === "v" && !isEditingText() && clipboardAnnot) {
+    e.preventDefault();
+    await pasteAnnotation();
+    return;
+  }
+
+  // Tab: cycle through annotations
+  if (e.key === "Tab" && !isEditingText() && hasOpenDocument) {
+    e.preventDefault();
+    const page = viewport.getCurrentPage();
+    const annots = viewport.getAnnotations(page);
+    if (annots.length === 0) return;
+    const currentId = interaction.getSelectedId();
+    const currentIdx = currentId ? annots.findIndex(a => a.id === currentId) : -1;
+    const nextIdx = e.shiftKey
+      ? (currentIdx <= 0 ? annots.length - 1 : currentIdx - 1)
+      : (currentIdx + 1) % annots.length;
+    interaction.select(annots[nextIdx].id);
+    return;
+  }
+
+  // Arrow keys: nudge selected annotation (1pt, or 10pt with Shift)
   if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key) && interaction.getSelectedId()) {
     if (isEditingText()) return;
     e.preventDefault();
     const annot = interaction.getSelectedAnnotation();
     if (!annot) return;
 
+    const step = e.shiftKey ? 10 : 1;
     let dx = 0, dy = 0;
-    if (e.key === "ArrowLeft") dx = -1;
-    if (e.key === "ArrowRight") dx = 1;
-    if (e.key === "ArrowUp") dy = -1;
-    if (e.key === "ArrowDown") dy = 1;
+    if (e.key === "ArrowLeft") dx = -step;
+    if (e.key === "ArrowRight") dx = step;
+    if (e.key === "ArrowUp") dy = -step;
+    if (e.key === "ArrowDown") dy = step;
 
     const newRect: [number, number, number, number] = [
       annot.rect[0] + dx, annot.rect[1] + dy,
@@ -521,6 +603,50 @@ async function handleKeyDown(e: KeyboardEvent): Promise<void> {
     await rpc.send({ type: "setAnnotRect", annotId: annot.id, rect: newRect });
     await viewport.rerenderPage(annot.page);
     return;
+  }
+}
+
+// --- Clipboard & Duplicate ---
+
+let clipboardAnnot: import("./types").AnnotationDTO | null = null;
+
+async function duplicateSelected(): Promise<void> {
+  const annot = interaction.getSelectedAnnotation();
+  if (!annot) return;
+  const offset = 10;
+  const newRect: [number, number, number, number] = [
+    annot.rect[0] + offset, annot.rect[1] + offset,
+    annot.rect[2] + offset, annot.rect[3] + offset,
+  ];
+  const response = await rpc.send({
+    type: "createAnnot", page: annot.page, annotType: annot.type, rect: newRect,
+    properties: { ...annot, rect: newRect },
+  });
+  if (response.type === "annotCreated") {
+    undoManager.push({ annotId: response.annot.id, property: "create", previousValue: null, newValue: response.annot });
+    markDirty();
+    await viewport.rerenderPage(annot.page);
+    interaction.select(response.annot.id);
+  }
+}
+
+async function pasteAnnotation(): Promise<void> {
+  if (!clipboardAnnot) return;
+  const page = viewport.getCurrentPage();
+  const offset = 10;
+  const newRect: [number, number, number, number] = [
+    clipboardAnnot.rect[0] + offset, clipboardAnnot.rect[1] + offset,
+    clipboardAnnot.rect[2] + offset, clipboardAnnot.rect[3] + offset,
+  ];
+  const response = await rpc.send({
+    type: "createAnnot", page, annotType: clipboardAnnot.type, rect: newRect,
+    properties: { ...clipboardAnnot, rect: newRect, page },
+  });
+  if (response.type === "annotCreated") {
+    undoManager.push({ annotId: response.annot.id, property: "create", previousValue: null, newValue: response.annot });
+    markDirty();
+    await viewport.rerenderPage(page);
+    interaction.select(response.annot.id);
   }
 }
 
