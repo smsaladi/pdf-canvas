@@ -338,7 +338,8 @@ function init() {
     }
   });
   viewportEl.addEventListener("pointerdown", (e) => {
-    if (isPanning) {
+    const handActive = isPanning || toolbar.getTool() === "hand";
+    if (handActive) {
       e.preventDefault();
       e.stopPropagation();
       viewportEl.style.cursor = "grabbing";
@@ -348,7 +349,7 @@ function init() {
         viewportEl.scrollTop = panStart.scrollTop - (ev.clientY - panStart.y);
       };
       const onUp = () => {
-        viewportEl.style.cursor = "grab";
+        viewportEl.style.cursor = isPanning ? "grab" : "";
         document.removeEventListener("pointermove", onMove);
         document.removeEventListener("pointerup", onUp);
       };
@@ -528,7 +529,7 @@ async function handleKeyDown(e: KeyboardEvent): Promise<void> {
   // Tool shortcuts (single key, no modifier, not while editing text)
   if (!e.ctrlKey && !e.metaKey && !e.altKey && !isEditingText()) {
     const toolKeys: Record<string, import("./toolbar").ToolMode> = {
-      v: "select", t: "textedit", n: "note", f: "freetext",
+      v: "select", p: "hand", t: "textedit", n: "note", f: "freetext",
       h: "highlight", r: "rectangle", c: "circle", l: "line", d: "ink",
     };
     const tool = toolKeys[e.key.toLowerCase()];

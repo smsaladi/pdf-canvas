@@ -92,7 +92,9 @@ export class InteractionLayer {
     }
     this.currentTool = tool;
     for (const [, container] of this.overlayContainers) {
-      container.style.cursor = tool === "textedit" ? "text" : tool === "select" ? "" : "crosshair";
+      container.style.cursor = tool === "hand" ? "grab" : tool === "textedit" ? "text" : tool === "select" ? "" : "crosshair";
+      // In hand mode, disable pointer events on overlays so drag goes to viewport
+      container.style.pointerEvents = tool === "hand" ? "none" : "";
     }
   }
 

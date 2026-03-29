@@ -400,15 +400,21 @@ export function augmentFont(
       if (codePoint === undefined) continue;
 
       // Find the glyph index for this codepoint in the subset
-      const glyphIndex = cmap[codePoint];
+      let glyphIndex = cmap[codePoint];
+      let isNewGlyph = false;
+
       if (glyphIndex === undefined || glyphIndex === null) {
-        console.log(`[FontAugment] No cmap entry for "${char}" (U+${codePoint.toString(16).padStart(4, "0")}) — cannot inject`);
-        continue;
+        // No cmap entry — we need to APPEND a new glyph and add a cmap entry
+        glyphIndex = subsetData.glyf.length;
+        subsetData.glyf.push({ contours: [], xMin: 0, yMin: 0, xMax: 0, yMax: 0, advanceWidth: 0, leftSideBearing: 0, name: "" } as any);
+        cmap[codePoint] = glyphIndex;
+        isNewGlyph = true;
+        console.log(`[FontAugment] New glyph slot at index ${glyphIndex} for "${char}" (U+${codePoint.toString(16).padStart(4, "0")})`);
       }
 
-      // Check if the glyph at this index is empty
+      // Check if the glyph at this index is empty (or newly created)
       const existingGlyph = subsetData.glyf[glyphIndex];
-      if (existingGlyph && existingGlyph.contours && existingGlyph.contours.length > 0) {
+      if (!isNewGlyph && existingGlyph && existingGlyph.contours && existingGlyph.contours.length > 0) {
         // Already has outlines — skip
         continue;
       }

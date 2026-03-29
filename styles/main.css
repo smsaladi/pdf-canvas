@@ -660,3 +660,48 @@ body {
   pointer-events: none;
   z-index: 20;
 }
+
+/* --- Responsive --- */
+
+/* Toolbar: allow wrapping and scrolling on narrow windows */
+#toolbar {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: var(--toolbar-height);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Hide text labels on toolbar buttons when narrow */
+@media (max-width: 900px) {
+  .tb span { display: none; }
+  .tb { padding: 4px 6px; }
+  .toolbar-label { font-size: 11px; min-width: 32px; }
+  .toolbar-select { max-width: 50px; }
+}
+
+/* Stack properties panel below viewport on small screens */
+@media (max-width: 700px) {
+  #main-area {
+    flex-direction: column;
+  }
+  #properties-panel {
+    width: 100% !important;
+    max-height: 40vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+  #properties-panel:not(.open) {
+    max-height: 0;
+    border-top: none;
+  }
+}
+
+/* Compact toolbar on very narrow screens */
+@media (max-width: 500px) {
+  #toolbar { gap: 1px; padding: 0 4px; }
+  .toolbar-group { gap: 1px; }
+  .toolbar-sep { margin: 0 2px; }
+  .tb { padding: 4px; }
+  #style-group { display: none; }
+}
