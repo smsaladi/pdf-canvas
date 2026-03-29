@@ -10,6 +10,7 @@ export interface AnnotationDTO {
   opacity: number;
   contents: string;
   borderWidth: number;
+  borderStyle?: string;
   hasRect: boolean;
   author?: string;
   modifiedDate?: string;
@@ -94,6 +95,7 @@ export type WorkerRequest =
   | { type: "setAnnotContents"; annotId: string; text: string }
   | { type: "setAnnotOpacity"; annotId: string; opacity: number }
   | { type: "setAnnotBorderWidth"; annotId: string; width: number }
+  | { type: "setAnnotBorderStyle"; annotId: string; style: string }
   | { type: "setAnnotInteriorColor"; annotId: string; color: number[] }
   | { type: "setAnnotDefaultAppearance"; annotId: string; font: string; size: number; color: number[] }
   | { type: "setAnnotIcon"; annotId: string; icon: string }

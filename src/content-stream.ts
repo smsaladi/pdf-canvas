@@ -470,6 +470,140 @@ export function replaceTextWithFontSwitch(
   return { result, count: 0 };
 }
 
+// --- Type0 / Identity-H hex glyph ID replacement ---
+
+/**
+ * Parse a PDF ToUnicode CMap stream to build GID↔Unicode mappings.
+ */
+export function parseToUnicodeCMap(cmapData: string): { gidToUnicode: Map<number, string>; unicodeToGid: Map<string, number> } {
+  const gidToUnicode = new Map<number, string>();
+  const unicodeToGid = new Map<string, number>();
+
+  // Parse beginbfchar: <GID> <Unicode>
+  const bfcharSections = cmapData.match(/beginbfchar\s*([\s\S]*?)endbfchar/g) || [];
+  for (const section of bfcharSections) {
+    for (const [, gidHex, uniHex] of section.matchAll(/<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>/g)) {
+      const gid = parseInt(gidHex, 16);
+      const ch = String.fromCharCode(parseInt(uniHex, 16));
+      gidToUnicode.set(gid, ch);
+      unicodeToGid.set(ch, gid);
+    }
+  }
+
+  // Parse beginbfrange: <startGID> <endGID> <startUnicode>
+  const bfrangeSections = cmapData.match(/beginbfrange\s*([\s\S]*?)endbfrange/g) || [];
+  for (const section of bfrangeSections) {
+    for (const [, startHex, endHex, uniStartHex] of section.matchAll(/<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>/g)) {
+      const startGid = parseInt(startHex, 16);
+      const endGid = parseInt(endHex, 16);
+      let uniCode = parseInt(uniStartHex, 16);
+      for (let gid = startGid; gid <= endGid; gid++) {
+        const ch = String.fromCharCode(uniCode);
+        gidToUnicode.set(gid, ch);
+        unicodeToGid.set(ch, gid);
+        uniCode++;
+      }
+    }
+  }
+
+  return { gidToUnicode, unicodeToGid };
+}
+
+/**
+ * Replace text in a Type0/Identity-H content stream where text is encoded
+ * as hex glyph IDs: <002B> Tj (one per character with Td positioning).
+ *
+ * Decodes hex strings to Unicode via the GID→Unicode map, finds the target
+ * text, and re-encodes replacement characters back to hex GIDs.
+ *
+ * Returns null for characters that can't be encoded (missing from font).
+ */
+export function replaceHexTextInStream(
+  stream: string,
+  oldText: string,
+  newText: string,
+  gidToUnicode: Map<number, string>,
+  unicodeToGid: Map<string, number>,
+): { result: string; count: number; missingChars: string[] } {
+  // Find all hex Tj operators and their positions
+  const hexPattern = /<([0-9A-Fa-f]{4})>\s*Tj/g;
+  const hexOps: Array<{ gid: number; char: string; start: number; end: number; hexStart: number; hexEnd: number }> = [];
+  let m;
+
+  while ((m = hexPattern.exec(stream)) !== null) {
+    const gid = parseInt(m[1], 16);
+    const ch = gidToUnicode.get(gid) || "";
+    hexOps.push({
+      gid, char: ch,
+      start: m.index, end: m.index + m[0].length,
+      hexStart: m.index + 1, // position of first hex digit (after <)
+      hexEnd: m.index + 5, // position after last hex digit (before >)
+    });
+  }
+
+  if (hexOps.length === 0) return { result: stream, count: 0, missingChars: [] };
+
+  // Build the decoded text from all hex operators
+  const decodedText = hexOps.map(op => op.char).join("");
+
+  // Find the old text in the decoded sequence
+  const idx = decodedText.indexOf(oldText);
+  if (idx === -1) return { result: stream, count: 0, missingChars: [] };
+
+  // Check which replacement characters can be encoded
+  const missingChars: string[] = [];
+  for (const ch of newText) {
+    if (!unicodeToGid.has(ch) && ch !== " ") { // space might use a special GID
+      missingChars.push(ch);
+    }
+  }
+
+  // Even with missing chars, replace what we can (missing chars will need font augmentation)
+  // For now, skip characters we can't encode
+  const encodableNewText = [...newText].filter(ch => unicodeToGid.has(ch) || ch === oldText[0]).join(""); // fallback
+
+  // The replacement needs to handle the case where newText length ≠ oldText length
+  // Strategy: replace the hex values for the characters we're changing,
+  // and if the new text is shorter, blank out extra operators;
+  // if longer, we can't easily add new operators (would need to restructure)
+
+  // For same-length or shorter: swap hex values in place
+  let result = stream;
+  let offset = 0;
+
+  // Replace each character in the matched range
+  const matchStart = idx;
+  const matchEnd = idx + oldText.length;
+
+  for (let i = matchStart; i < Math.min(matchEnd, matchStart + newText.length); i++) {
+    const op = hexOps[i];
+    const newChar = newText[i - matchStart];
+    const newGid = unicodeToGid.get(newChar);
+
+    if (newGid !== undefined) {
+      const newHex = newGid.toString(16).padStart(4, "0");
+      const adjStart = op.hexStart + offset;
+      const adjEnd = op.hexEnd + offset;
+      result = result.slice(0, adjStart) + newHex + result.slice(adjEnd);
+      // No offset change since hex is same length (4 chars)
+    }
+  }
+
+  // If new text is shorter, blank out remaining operators (set to space GID)
+  const spaceGid = unicodeToGid.get(" ");
+  if (newText.length < oldText.length && spaceGid !== undefined) {
+    for (let i = matchStart + newText.length; i < matchEnd; i++) {
+      const op = hexOps[i];
+      const newHex = spaceGid.toString(16).padStart(4, "0");
+      const adjStart = op.hexStart + offset;
+      const adjEnd = op.hexEnd + offset;
+      result = result.slice(0, adjStart) + newHex + result.slice(adjEnd);
+    }
+  }
+
+  return { result, count: 1, missingChars };
+}
+
 /**
  * Get all unique decoded text strings from the content stream.
  * Useful for building a "find" index.

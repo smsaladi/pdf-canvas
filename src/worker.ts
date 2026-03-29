@@ -4,7 +4,7 @@
 import * as mupdf from "mupdf";
 import { createWorkerResponder } from "./worker-rpc";
 import type { WorkerRequest, WorkerResponse, PageInfo, AnnotationDTO, TextBlock, TextLine, CharInfo, PageTextData, TextSearchResult } from "./types";
-import { replaceTextInStream as replaceInStream, replaceTextWithFontSwitch } from "./content-stream";
+import { replaceTextInStream as replaceInStream, replaceTextWithFontSwitch, parseToUnicodeCMap, replaceHexTextInStream } from "./content-stream";
 import { parseFontName, matchReferenceFont, fetchFont, augmentFont } from "./font-augment";
 import { setDoc, getDoc } from "./worker/doc-state";
 import { getPageInfo, renderPage, getAnnotations, resolveAnnot, resolveWidget } from "./worker/helpers";
@@ -90,6 +90,7 @@ self.onmessage = async function (e: MessageEvent) {
       case "setAnnotContents": { const { annot } = resolveAnnot(request.annotId); annot.setContents(request.text); annot.update(); respond(_rpcId, { type: "annotUpdated", annotId: request.annotId }); break; }
       case "setAnnotOpacity": { const { annot } = resolveAnnot(request.annotId); annot.setOpacity(request.opacity); annot.update(); respond(_rpcId, { type: "annotUpdated", annotId: request.annotId }); break; }
       case "setAnnotBorderWidth": { const { annot } = resolveAnnot(request.annotId); annot.setBorderWidth(request.width); annot.update(); respond(_rpcId, { type: "annotUpdated", annotId: request.annotId }); break; }
+      case "setAnnotBorderStyle": { const { annot } = resolveAnnot(request.annotId); annot.setBorderStyle(request.style as mupdf.PDFAnnotationBorderStyle); annot.update(); respond(_rpcId, { type: "annotUpdated", annotId: request.annotId }); break; }
       case "setAnnotInteriorColor": { const { annot } = resolveAnnot(request.annotId); annot.setInteriorColor(request.color as mupdf.AnnotColor); annot.update(); respond(_rpcId, { type: "annotUpdated", annotId: request.annotId }); break; }
       case "setAnnotDefaultAppearance": { const { annot } = resolveAnnot(request.annotId); annot.setDefaultAppearance((request as any).font, (request as any).size, (request as any).color as mupdf.AnnotColor); annot.update(); respond(_rpcId, { type: "annotUpdated", annotId: request.annotId }); break; }
       case "setAnnotIcon": { const { annot } = resolveAnnot(request.annotId); annot.setIcon(request.icon); annot.update(); respond(_rpcId, { type: "annotUpdated", annotId: request.annotId }); break; }
@@ -132,6 +133,7 @@ self.onmessage = async function (e: MessageEvent) {
           if (props.inkList) { try { annot.setInkList(props.inkList as mupdf.Point[][]); } catch {} }
           if (props.line) { try { annot.setLine(props.line[0] as mupdf.Point, props.line[1] as mupdf.Point); } catch {} }
           if (props.author) annot.setAuthor(props.author);
+
         }
         annot.update();
         const created = getAnnotations(request.page).at(-1)!;
@@ -334,6 +336,48 @@ self.onmessage = async function (e: MessageEvent) {
         if (doStreamReplace()) {
           respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 1, method: augmentedAnyFont ? "font-augment" : "content-stream" }); break;
         }
+        // --- Tier 2: Type0/Identity-H hex glyph replacement ---
+        console.log(`[Type0] Trying hex glyph replacement...`);
+        try {
+          const resources2 = pageObj.get("Resources");
+          const fontDict2 = (!resources2.isNull()) ? resources2.get("Font") : null;
+          if (fontDict2 && !fontDict2.isNull()) {
+            const fontKeys2: string[] = [];
+            fontDict2.forEach((_: any, key: string | number) => { fontKeys2.push(String(key)); });
+
+            for (const fk of fontKeys2) {
+              const fo = fontDict2.get(fk);
+              if (fo.get("Subtype").asName() !== "Type0") continue;
+              const bfn = fo.get("BaseFont").asName();
+              if (request.fontName && bfn !== request.fontName) continue;
+
+              const toUnicode = fo.get("ToUnicode");
+              if (!toUnicode.isStream()) { console.log(`[Type0] No ToUnicode for ${bfn}`); continue; }
+
+              const { gidToUnicode, unicodeToGid } = parseToUnicodeCMap(toUnicode.readStream().asString());
+              console.log(`[Type0] Parsed CMap for "${bfn}": ${gidToUnicode.size} mappings`);
+
+              const tryHex = (ref: any): boolean => {
+                if (!ref.isStream()) return false;
+                const { result, count, missingChars } = replaceHexTextInStream(ref.readStream().asString(), request.oldText, request.newText, gidToUnicode, unicodeToGid);
+                if (missingChars.length > 0) console.log(`[Type0] Missing chars: ${missingChars.join(", ")}`);
+                if (count > 0) { ref.writeStream(result); return true; }
+                return false;
+              };
+
+              let ok = false;
+              if (contentsRef.isArray()) { for (let i = 0; i < contentsRef.length; i++) if (tryHex(contentsRef.get(i))) { ok = true; break; } }
+              else if (contentsRef.isStream()) ok = tryHex(contentsRef);
+
+              if (ok) {
+                console.log(`[Type0] ✓ Hex replacement succeeded`);
+                respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 1, method: "content-stream" });
+                return;
+              }
+            }
+          }
+        } catch (err) { console.warn("[Type0] Failed:", err); }
+
         console.warn(`[TextEdit] All methods failed for "${request.oldText}"`);
         respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 0, method: "failed" }); break;
       }

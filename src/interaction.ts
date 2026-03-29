@@ -620,7 +620,6 @@ export class InteractionLayer {
         properties.color = this.currentColor;
         properties.borderWidth = this.currentBorderWidth;
         if (this.currentFillColor) properties.interiorColor = this.currentFillColor;
-        properties._noBorder = true;
         break;
       case "line":
         properties.color = this.currentColor;
@@ -630,7 +629,6 @@ export class InteractionLayer {
       case "ink":
         properties.color = this.currentColor;
         properties.borderWidth = this.currentBorderWidth;
-        properties._noBorder = true;
         if (inkPoints && inkPoints.length > 1) {
           // Convert screen ink points to PDF coords
           const pdfPoints = inkPoints.map(([sx, sy]) => {
