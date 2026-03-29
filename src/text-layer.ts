@@ -406,18 +406,24 @@ export class TextLayer {
     const page = this.currentSelection.page;
     const selection = this.currentSelection;
 
-    // Build extended context: include chars from the same line before/after selection
-    // This helps disambiguate when the same word appears multiple times
+    // Build context for disambiguating the content stream match:
+    // 1. Full line text (unique fingerprint)
+    // 2. Y-coordinate of the selection (for duplicate lines)
     const data = this.viewport.getTextData(page);
     let lineContext = "";
+    let selectionY: number | undefined;
     if (data && selection.chars.length > 0) {
       const firstChar = selection.chars[0];
       const line = data.blocks[firstChar.block]?.lines[firstChar.line];
       if (line) {
         lineContext = line.chars.map(c => c.c).join("");
       }
+      // Y-coordinate from the character's quad (average of top and bottom)
+      const q = firstChar.info.quad;
+      selectionY = (q[1] + q[5]) / 2; // avg of upper-left Y and lower-left Y
     }
     (selection as any)._lineContext = lineContext;
+    (selection as any)._selectionY = selectionY;
 
     this.editOverlay.remove();
     this.editOverlay = null;

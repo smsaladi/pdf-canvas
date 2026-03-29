@@ -91,7 +91,8 @@ function init() {
     // Get the font name and line context for disambiguation
     const selFontName = selection.chars[0]?.info.fontName || undefined;
     const lineContext = (selection as any)._lineContext || "";
-    console.log(`[TextEdit] Replacing "${oldText}" → "${newText}" on page ${page} (font: ${selFontName || "unknown"}, context: "${lineContext.substring(0, 40)}")`);
+    const selectionY = (selection as any)._selectionY;
+    console.log(`[TextEdit] Replacing "${oldText}" → "${newText}" on page ${page} (font: ${selFontName || "unknown"}, y=${selectionY?.toFixed(1)}, line: "${lineContext.substring(0, 40)}")`);
     const response = await rpc.send({
       type: "replaceTextSmart",
       page,
@@ -101,6 +102,7 @@ function init() {
       italicOverride: styleOverride?.italic,
       fontName: selFontName,
       lineContext,
+      selectionY,
     } as any);
 
     if (response.type === "textReplacedSmart") {

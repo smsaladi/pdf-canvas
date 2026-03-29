@@ -525,66 +525,108 @@ export function replaceHexTextInStream(
   gidToUnicode: Map<number, string>,
   unicodeToGid: Map<string, number>,
   lineContext?: string,
+  selectionY?: number,
 ): { result: string; count: number; missingChars: string[] } {
-  // Find all hex Tj operators and their positions
-  const hexPattern = /<([0-9A-Fa-f]{4})>\s*Tj/g;
-  const hexOps: Array<{ gid: number; char: string; hexStart: number; hexEnd: number }> = [];
-  let m;
-
-  while ((m = hexPattern.exec(stream)) !== null) {
-    const gid = parseInt(m[1], 16);
-    const ch = gidToUnicode.get(gid) || "";
-    hexOps.push({
-      gid, char: ch,
-      hexStart: m.index + 1,
-      hexEnd: m.index + 5,
-    });
-  }
-
-  if (hexOps.length === 0) return { result: stream, count: 0, missingChars: [] };
-
   const missingChars: string[] = [];
   for (const ch of new Set(newText)) {
     if (!unicodeToGid.has(ch)) missingChars.push(ch);
   }
 
-  // === LINE-LEVEL MATCHING ===
-  // Instead of searching for just oldText (ambiguous), search for the
-  // ENTIRE LINE's character sequence in the hex operators. A full line
-  // is almost always unique in the document. Then locate oldText within
-  // the matched line to find the exact operators to modify.
+  // === BLOCK-LEVEL MATCHING ===
+  // Split the stream into BT...ET blocks. Each block has a Tm position
+  // and a sequence of hex-encoded characters. Match by:
+  // 1. Decode each block's text
+  // 2. Find blocks containing the old text
+  // 3. Disambiguate by line context and/or y-coordinate
 
-  const searchSequence = lineContext && lineContext.length > oldText.length ? lineContext : oldText;
-  const oldTextOffsetInSearch = lineContext ? lineContext.indexOf(oldText) : 0;
+  interface HexOp { gid: number; char: string; hexStart: number; hexEnd: number; }
+  interface TextBlock { blockStart: number; blockEnd: number; yPos: number; hexOps: HexOp[]; decoded: string; }
 
-  // Find the search sequence as verified consecutive hex operators
-  let lineMatchStart = -1;
-  for (let startI = 0; startI <= hexOps.length - searchSequence.length; startI++) {
-    let matched = true;
-    for (let j = 0; j < searchSequence.length; j++) {
-      if (hexOps[startI + j].char !== searchSequence[j]) { matched = false; break; }
+  const blocks: TextBlock[] = [];
+  const btPattern = /BT\b([\s\S]*?)ET\b/g;
+  let btMatch;
+
+  while ((btMatch = btPattern.exec(stream)) !== null) {
+    const blockContent = btMatch[1];
+    const blockStart = btMatch.index;
+    const blockEnd = btMatch.index + btMatch[0].length;
+
+    // Extract Tm y-coordinate
+    let yPos = 0;
+    const tmMatch = blockContent.match(/[\d.e+-]+\s+[\d.e+-]+\s+[\d.e+-]+\s+[\d.e+-]+\s+([\d.e+-]+)\s+([\d.e+-]+)\s+Tm/);
+    if (tmMatch) yPos = parseFloat(tmMatch[2]);
+
+    // Extract hex operators within this block
+    const hexOps: HexOp[] = [];
+    const hexPattern = /<([0-9A-Fa-f]{4})>\s*Tj/g;
+    let hm;
+    while ((hm = hexPattern.exec(blockContent)) !== null) {
+      const gid = parseInt(hm[1], 16);
+      const absStart = blockStart + (btMatch[0].indexOf(blockContent)) + hm.index + 1;
+      hexOps.push({
+        gid,
+        char: gidToUnicode.get(gid) || "",
+        hexStart: absStart,
+        hexEnd: absStart + 4,
+      });
     }
-    if (matched) { lineMatchStart = startI; break; }
+
+    if (hexOps.length > 0) {
+      blocks.push({ blockStart, blockEnd, yPos, hexOps, decoded: hexOps.map(o => o.char).join("") });
+    }
   }
 
-  // The actual oldText starts at offset within the line match
-  let matchStartIdx: number;
-  if (lineMatchStart !== -1 && oldTextOffsetInSearch >= 0) {
-    matchStartIdx = lineMatchStart + oldTextOffsetInSearch;
-    console.log(`[Type0] Matched full line "${searchSequence.substring(0, 30)}..." at hex index ${lineMatchStart}, oldText at offset ${oldTextOffsetInSearch}`);
-  } else {
-    // Fallback: direct search for oldText (for cases without line context)
-    matchStartIdx = -1;
-    for (let startI = 0; startI <= hexOps.length - oldText.length; startI++) {
-      let matched = true;
-      for (let j = 0; j < oldText.length; j++) {
-        if (hexOps[startI + j].char !== oldText[j]) { matched = false; break; }
+  if (blocks.length === 0) return { result: stream, count: 0, missingChars };
+
+  // Find the target block: must contain oldText, prefer matching lineContext and yPos
+  let targetBlock: TextBlock | null = null;
+  let targetOffset = -1;
+
+  // Strategy 1: Match full line context within a block
+  if (lineContext && lineContext.length > oldText.length) {
+    for (const block of blocks) {
+      const lineIdx = block.decoded.indexOf(lineContext);
+      if (lineIdx !== -1) {
+        const oldIdx = lineContext.indexOf(oldText);
+        if (oldIdx !== -1) {
+          targetBlock = block;
+          targetOffset = lineIdx + oldIdx;
+          break;
+        }
       }
-      if (matched) { matchStartIdx = startI; break; }
     }
   }
 
-  if (matchStartIdx === -1) return { result: stream, count: 0, missingChars };
+  // Strategy 2: If line context didn't work, use y-coordinate to disambiguate
+  if (!targetBlock && selectionY !== undefined) {
+    const candidates = blocks.filter(b => b.decoded.includes(oldText));
+    if (candidates.length > 0) {
+      // Pick the block whose y-position is closest to the selection
+      candidates.sort((a, b) => Math.abs(a.yPos - selectionY) - Math.abs(b.yPos - selectionY));
+      targetBlock = candidates[0];
+      targetOffset = targetBlock.decoded.indexOf(oldText);
+    }
+  }
+
+  // Strategy 3: Fallback — first block containing oldText
+  if (!targetBlock) {
+    for (const block of blocks) {
+      const idx = block.decoded.indexOf(oldText);
+      if (idx !== -1) {
+        targetBlock = block;
+        targetOffset = idx;
+        break;
+      }
+    }
+  }
+
+  if (!targetBlock || targetOffset === -1) return { result: stream, count: 0, missingChars };
+
+  console.log(`[Type0] Matched in block at y=${targetBlock.yPos}, decoded="${targetBlock.decoded.substring(0, 40)}", offset=${targetOffset}`);
+
+  // Now we have the exact hex operators to modify
+  const hexOps = targetBlock.hexOps;
+  const matchStartIdx = targetOffset;
 
   // Replace character by character
   let result = stream;
