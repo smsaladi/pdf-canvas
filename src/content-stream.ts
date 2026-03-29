@@ -188,22 +188,6 @@ export function extractTextOccurrences(stream: string): TextOccurrence[] {
   return results;
 }
 
-/**
- * Replace a specific text occurrence in the content stream.
- * Returns the modified stream string.
- */
-export function replaceTextAt(
-  stream: string,
-  occurrence: TextOccurrence,
-  newText: string
-): string {
-  const encoded = occurrence.isHex
-    ? encodeHexString(newText)
-    : encodeLiteralString(newText);
-
-  return stream.slice(0, occurrence.start) + encoded + stream.slice(occurrence.end);
-}
-
 /** A TJ array with its position in the stream and decoded fragments */
 interface TJArrayInfo {
   /** Start offset of the '[' in the stream */

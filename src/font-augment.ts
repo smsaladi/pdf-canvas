@@ -191,7 +191,7 @@ function loadFontFromIDBSync(key: string): ArrayBuffer | null {
   return null;
 }
 
-/** Pre-warm the memory cache from IndexedDB (call from main thread at startup) */
+/** Phase 6 TODO: Pre-warm the memory cache from IndexedDB on app startup */
 export async function loadAllCachedFonts(): Promise<void> {
   return new Promise((resolve) => {
     try {
@@ -310,7 +310,7 @@ export interface LocalFontInfo {
 }
 
 /**
- * Query system fonts via the Local Font Access API.
+ * Phase 6 TODO: Query system fonts via the Local Font Access API.
  * Returns null if not supported or user denies permission.
  * Only works in Chromium browsers on the main thread.
  */
@@ -336,7 +336,7 @@ export async function queryLocalFonts(): Promise<LocalFontInfo[] | null> {
 }
 
 /**
- * Load a specific system font by postscriptName.
+ * Phase 6 TODO: Load a specific system font by postscriptName.
  * Returns the font binary as ArrayBuffer, or null.
  */
 export async function loadLocalFont(postscriptName: string): Promise<ArrayBuffer | null> {

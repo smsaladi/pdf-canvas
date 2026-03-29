@@ -287,22 +287,6 @@ self.onmessage = async function (e: MessageEvent) {
         respond(_rpcId, { type: "textReplaced", page: request.page, count: totalCount }); break;
       }
 
-      // --- Text replacement (redact fallback) ---
-
-      case "replaceTextViaRedact": {
-        const page = getDoc().loadPage(request.page) as mupdf.PDFPage;
-        const redact = page.createAnnotation("Redact");
-        redact.setRect(request.rect);
-        page.applyRedactions(false, 0, 0, 0);
-        if (request.newText.trim()) {
-          const ft = page.createAnnotation("FreeText");
-          ft.setRect(request.rect); ft.setContents(request.newText);
-          ft.setDefaultAppearance(request.fontFamily as string, request.fontSize, request.color as mupdf.AnnotColor);
-          ft.setBorderWidth(0); ft.setColor([]); ft.update();
-        }
-        respond(_rpcId, { type: "textReplaced", page: request.page, count: 1 }); break;
-      }
-
       // --- Smart text replacement (with font augmentation) ---
 
       case "replaceTextSmart": {
