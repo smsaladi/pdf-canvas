@@ -614,11 +614,16 @@ self.onmessage = async function (e: MessageEvent) {
 
                 const augmented = augmentFont(subsetBuffer, xhr.response as ArrayBuffer, missingInThisFont);
                 if (augmented) {
-                  fontFile2.writeStream(new Uint8Array(augmented));
-                  console.log(`[FontAugment] ✓ Wrote augmented font back (${augmented.byteLength} bytes, added ${missingInThisFont.length} glyph(s): ${missingInThisFont.join(", ")})`);
+                  // Create a NEW mupdf.Font from the augmented TTF buffer
+                  const newFont = new mupdf.Font(baseFontName, augmented);
+                  // Embed it as a new PDF font resource (new object = new cache entry)
+                  const newFontResource = doc!.addSimpleFont(newFont, "Latin");
+                  // Replace the font entry in the page's Resources/Font dictionary
+                  fontDict.put(fontKey, newFontResource);
+                  console.log(`[FontAugment] ✓ Replaced /${fontKey} with new font resource (${augmented.byteLength} bytes, ${missingInThisFont.length} glyph(s): ${missingInThisFont.join(", ")})`);
                   augmentedAnyFont = true;
                 } else {
-                  console.warn(`[FontAugment] ✗ augmentFont() returned null — opentype.js augmentation failed`);
+                  console.warn(`[FontAugment] ✗ augmentFont() returned null`);
                 }
               } catch (fontErr) {
                 console.warn(`[FontAugment] Error processing font /${fontKey}:`, fontErr);
@@ -631,41 +636,14 @@ self.onmessage = async function (e: MessageEvent) {
           console.warn("[FontAugment] Glyph check failed:", err);
         }
 
-        // --- Step 2: If we augmented fonts, save+reopen to flush MuPDF's font cache ---
+        // --- Step 2: If we augmented fonts, clear MuPDF's cache ---
         if (augmentedAnyFont) {
-          console.log(`[FontAugment] Saving and reopening document to flush MuPDF font cache...`);
-          const buf = doc!.saveToBuffer("compress");
-          const bytes = buf.asUint8Array();
-          const freshBuffer = new ArrayBuffer(bytes.byteLength);
-          new Uint8Array(freshBuffer).set(bytes);
-          doc = new mupdf.PDFDocument(freshBuffer);
-          console.log(`[FontAugment] Document reopened (${freshBuffer.byteLength} bytes)`);
+          mupdf.emptyStore(); // Clear all cached font/image data
+          console.log(`[FontAugment] Cleared MuPDF store cache`);
         }
 
         // --- Step 3: Content stream replacement ---
-        // Re-get page references after potential reopen
-        const finalPage = doc!.loadPage(request.page) as mupdf.PDFPage;
-        const finalPageObj = finalPage.getObject();
-        const finalContentsRef = finalPageObj.get("Contents");
-
-        const doFinalStreamReplace = (): boolean => {
-          if (finalContentsRef.isArray()) {
-            for (let i = 0; i < finalContentsRef.length; i++) {
-              const streamRef = finalContentsRef.get(i);
-              if (!streamRef.isStream()) continue;
-              const streamData = streamRef.readStream().asString();
-              const { result, count } = replaceInStream(streamData, request.oldText, request.newText);
-              if (count > 0) { streamRef.writeStream(result); return true; }
-            }
-          } else if (finalContentsRef.isStream()) {
-            const streamData = finalContentsRef.readStream().asString();
-            const { result, count } = replaceInStream(streamData, request.oldText, request.newText);
-            if (count > 0) { finalContentsRef.writeStream(result); return true; }
-          }
-          return false;
-        };
-
-        if (augmentedAnyFont ? doFinalStreamReplace() : doStreamReplace()) {
+        if (doStreamReplace()) {
           const method = augmentedAnyFont ? "font-augment" : "content-stream";
           respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 1, method });
           break;

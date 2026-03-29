@@ -105,6 +105,7 @@ export type WorkerRequest =
   | { type: "replaceTextViaRedact"; page: number; rect: [number, number, number, number]; newText: string; fontSize: number; fontFamily: string; color: number[] }
   | { type: "searchText"; needle: string; page?: number }
   | { type: "addImage"; page: number; rect: [number, number, number, number]; imageData: ArrayBuffer; mimeType: string }
+  | { type: "rotatePage"; page: number; angle: number }
   | { type: "save"; options?: string };
 
 export type WorkerResponse =
@@ -122,4 +123,5 @@ export type WorkerResponse =
   | { type: "textReplaced"; page: number; count: number }
   | { type: "textReplacedSmart"; page: number; count: number; method: "content-stream" | "font-augment" | "side-by-side" | "failed" }
   | { type: "searchResults"; results: TextSearchResult[] }
+  | { type: "pageRotated"; page: number; info: PageInfo }
   | { type: "error"; message: string; requestType?: string };
