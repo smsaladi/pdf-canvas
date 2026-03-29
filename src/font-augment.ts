@@ -150,19 +150,83 @@ export function matchReferenceFont(
   };
 }
 
-// --- Font loading (local bundled or Google Fonts CDN) ---
+// --- Font loading: memory cache → IndexedDB → Google Fonts CDN → local bundle ---
 
-// Cache for fetched fonts (keyed by URL)
-const fontCache = new Map<string, ArrayBuffer>();
+// In-memory cache (instant, lost on reload)
+const memoryCache = new Map<string, ArrayBuffer>();
 
-// Google Fonts CSS API URL patterns for weight+italic
+// IndexedDB cache (persists across reloads)
+const IDB_NAME = "pdf-canvas-fonts";
+const IDB_STORE = "fonts";
+
+function openFontDB(): IDBDatabase | null {
+  // Synchronous IDB isn't available in workers, so we use a pre-warmed memory cache
+  // The main thread pre-loads from IDB into memory on startup
+  return null;
+}
+
+/** Save a font to IndexedDB (async, fire-and-forget from worker) */
+function saveFontToIDB(key: string, buffer: ArrayBuffer): void {
+  try {
+    const request = indexedDB.open(IDB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE);
+      }
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).put(buffer, key);
+      console.log(`[FontCache] Saved to IndexedDB: ${key} (${buffer.byteLength} bytes)`);
+    };
+  } catch {}
+}
+
+/** Load a font from IndexedDB synchronously (for worker use — blocks) */
+function loadFontFromIDBSync(key: string): ArrayBuffer | null {
+  // Workers can't do sync IDB. We rely on the memory cache being pre-warmed.
+  // This is called as a fallback; the main thread should pre-warm via loadAllCachedFonts().
+  return null;
+}
+
+/** Pre-warm the memory cache from IndexedDB (call from main thread at startup) */
+export async function loadAllCachedFonts(): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      const request = indexedDB.open(IDB_NAME, 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore(IDB_STORE);
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction(IDB_STORE, "readonly");
+        const store = tx.objectStore(IDB_STORE);
+        const cursorReq = store.openCursor();
+        cursorReq.onsuccess = () => {
+          const cursor = cursorReq.result;
+          if (cursor) {
+            memoryCache.set(cursor.key as string, cursor.value as ArrayBuffer);
+            cursor.continue();
+          } else {
+            console.log(`[FontCache] Pre-warmed ${memoryCache.size} font(s) from IndexedDB`);
+            resolve();
+          }
+        };
+        cursorReq.onerror = () => resolve();
+      };
+      request.onerror = () => resolve();
+    } catch { resolve(); }
+  });
+}
+
 function getGoogleFontsCSSUrl(family: string, bold: boolean, italic: boolean): string {
   const weight = bold ? 700 : 400;
   const ital = italic ? 1 : 0;
   return `https://fonts.googleapis.com/css2?family=${family}:ital,wght@${ital},${weight}`;
 }
 
-// Maps Google Font family + style to bundled TTF file path (fallback for offline)
 export function getLocalFontPath(match: FontMatchResult): string {
   const base = match.googleFamily;
   let variant: string;
@@ -178,20 +242,19 @@ export function getLocalFontPath(match: FontMatchResult): string {
 }
 
 /**
- * Fetch a reference font, trying Google Fonts CDN first, falling back to local bundle.
- * Results are cached so subsequent calls are instant.
+ * Fetch a reference font. Checks: memory cache → Google Fonts CDN → local bundle.
+ * Caches to both memory and IndexedDB for persistence.
  */
 export function fetchFont(match: FontMatchResult): ArrayBuffer | null {
-  const localPath = getLocalFontPath(match);
   const cacheKey = `${match.googleFamily}-${match.bold ? "B" : "R"}${match.italic ? "I" : ""}`;
 
-  // Check cache first
-  if (fontCache.has(cacheKey)) {
-    console.log(`[FontFetch] Cache hit: ${cacheKey}`);
-    return fontCache.get(cacheKey)!;
+  // 1. Memory cache (instant)
+  if (memoryCache.has(cacheKey)) {
+    console.log(`[FontFetch] Memory cache hit: ${cacheKey}`);
+    return memoryCache.get(cacheKey)!;
   }
 
-  // Try Google Fonts CDN first (gets the exact weight/style)
+  // 2. Try Google Fonts CDN
   try {
     const cssUrl = getGoogleFontsCSSUrl(match.googleFamily, match.bold, match.italic);
     const cssXhr = new XMLHttpRequest();
@@ -208,17 +271,19 @@ export function fetchFont(match: FontMatchResult): ArrayBuffer | null {
 
         if (fontXhr.status === 200 && fontXhr.response) {
           const buffer = fontXhr.response as ArrayBuffer;
-          fontCache.set(cacheKey, buffer);
+          memoryCache.set(cacheKey, buffer);
+          saveFontToIDB(cacheKey, buffer); // persist for next session
           console.log(`[FontFetch] Downloaded from Google Fonts: ${cacheKey} (${buffer.byteLength} bytes)`);
           return buffer;
         }
       }
     }
   } catch (e) {
-    console.log(`[FontFetch] Google Fonts unavailable, using local fallback`);
+    console.log(`[FontFetch] Google Fonts unavailable, trying local`);
   }
 
-  // Fallback to local bundled font
+  // 3. Fallback to local bundled font
+  const localPath = getLocalFontPath(match);
   const xhr = new XMLHttpRequest();
   xhr.open("GET", localPath, false);
   xhr.responseType = "arraybuffer";
@@ -226,13 +291,64 @@ export function fetchFont(match: FontMatchResult): ArrayBuffer | null {
 
   if (xhr.status === 200 && xhr.response) {
     const buffer = xhr.response as ArrayBuffer;
-    fontCache.set(cacheKey, buffer);
+    memoryCache.set(cacheKey, buffer);
     console.log(`[FontFetch] Loaded local: ${localPath} (${buffer.byteLength} bytes)`);
     return buffer;
   }
 
   console.warn(`[FontFetch] Failed to load font: ${cacheKey}`);
   return null;
+}
+
+// --- Local Font Access API (system fonts) ---
+
+export interface LocalFontInfo {
+  family: string;
+  fullName: string;
+  postscriptName: string;
+  style: string;
+}
+
+/**
+ * Query system fonts via the Local Font Access API.
+ * Returns null if not supported or user denies permission.
+ * Only works in Chromium browsers on the main thread.
+ */
+export async function queryLocalFonts(): Promise<LocalFontInfo[] | null> {
+  try {
+    if (!("queryLocalFonts" in self)) return null;
+    const fonts = await (self as any).queryLocalFonts();
+    const result: LocalFontInfo[] = [];
+    for (const font of fonts) {
+      result.push({
+        family: font.family,
+        fullName: font.fullName,
+        postscriptName: font.postscriptName,
+        style: font.style,
+      });
+    }
+    console.log(`[LocalFonts] Found ${result.length} system fonts`);
+    return result;
+  } catch (e) {
+    console.log(`[LocalFonts] Access denied or not supported`);
+    return null;
+  }
+}
+
+/**
+ * Load a specific system font by postscriptName.
+ * Returns the font binary as ArrayBuffer, or null.
+ */
+export async function loadLocalFont(postscriptName: string): Promise<ArrayBuffer | null> {
+  try {
+    if (!("queryLocalFonts" in self)) return null;
+    const fonts = await (self as any).queryLocalFonts({ postscriptNames: [postscriptName] });
+    if (fonts.length === 0) return null;
+    const blob = await fonts[0].blob();
+    return await blob.arrayBuffer();
+  } catch {
+    return null;
+  }
 }
 
 // --- Font augmentation with opentype.js ---

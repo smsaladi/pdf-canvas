@@ -69,6 +69,7 @@ export class InteractionLayer {
   undoManager: UndoManager | null = null;
   textLayer: TextLayer | null = null;
   onCreationDone: (() => void) | null = null;
+  private activeInlineEdit: { annotId: string; el: HTMLDivElement; cleanup: () => void } | null = null;
 
   setColor(color: [number, number, number]): void { this.currentColor = color; }
   getColor(): [number, number, number] { return this.currentColor; }
@@ -138,6 +139,11 @@ export class InteractionLayer {
 
   select(annotId: string | null): void {
     if (this.selectedId === annotId) return;
+
+    // Cancel inline edit if switching away
+    if (this.activeInlineEdit && this.activeInlineEdit.annotId !== annotId) {
+      this.cancelInlineEdit();
+    }
 
     if (this.selectedId) {
       const prev = this.overlayElements.get(this.selectedId);
@@ -591,8 +597,16 @@ export class InteractionLayer {
     const p1 = screenToPdf(Math.min(startScreenX, endX), Math.min(startScreenY, endY), transform);
     const p2 = screenToPdf(Math.max(startScreenX, endX), Math.max(startScreenY, endY), transform);
 
-    // Skip if too small
-    if (Math.abs(p2.x - p1.x) < 3 && Math.abs(p2.y - p1.y) < 3 && tool !== "ink") return;
+    // Skip if too small (except freetext — give it a default size for click-to-create)
+    if (Math.abs(p2.x - p1.x) < 3 && Math.abs(p2.y - p1.y) < 3) {
+      if (tool === "freetext") {
+        // Default text box: 200pt wide, 24pt tall at click point
+        p2.x = p1.x + 200;
+        p2.y = p1.y + 24;
+      } else if (tool !== "ink") {
+        return;
+      }
+    }
 
     const rect: [number, number, number, number] = [p1.x, p1.y, p2.x, p2.y];
     const annotType = TOOL_TO_ANNOT_TYPE[tool];
@@ -663,6 +677,115 @@ export class InteractionLayer {
 
     if (response.type === "annotCreated") {
       this.select(response.annot.id);
+
+      // For FreeText, immediately start inline editing
+      if (tool === "freetext") {
+        // Wait for overlays to rebuild after rerender
+        requestAnimationFrame(() => {
+          this.startInlineEdit(response.annot.id);
+        });
+        return; // Don't switch to select tool yet
+      }
+    }
+    this.onCreationDone?.();
+  }
+
+  /** Start inline text editing on a FreeText annotation overlay */
+  startInlineEdit(annotId: string): void {
+    this.cancelInlineEdit();
+
+    const overlay = this.overlayElements.get(annotId);
+    const annot = this.getAnnotationForId(annotId);
+    if (!overlay || !annot || annot.type !== "FreeText") return;
+
+    const editEl = document.createElement("div");
+    editEl.className = "freetext-inline-edit";
+    editEl.contentEditable = "true";
+    editEl.style.position = "absolute";
+    editEl.style.left = "0";
+    editEl.style.top = "0";
+    editEl.style.width = "100%";
+    editEl.style.height = "100%";
+    editEl.style.outline = "none";
+    editEl.style.cursor = "text";
+    editEl.style.overflow = "hidden";
+    editEl.style.padding = "2px 4px";
+    editEl.style.boxSizing = "border-box";
+    editEl.style.color = "black";
+    editEl.style.zIndex = "30";
+
+    // Apply font from defaultAppearance
+    if (annot.defaultAppearance) {
+      const da = annot.defaultAppearance;
+      const scale = this.viewport.getScale();
+      editEl.style.fontSize = `${da.size * scale}px`;
+      const fontMap: Record<string, string> = { Helv: "sans-serif", TiRo: "serif", Cour: "monospace" };
+      editEl.style.fontFamily = fontMap[da.font] || "sans-serif";
+      if (da.color && da.color.length >= 3) {
+        editEl.style.color = `rgb(${Math.round(da.color[0] * 255)}, ${Math.round(da.color[1] * 255)}, ${Math.round(da.color[2] * 255)})`;
+      }
+    }
+
+    if (annot.contents) editEl.textContent = annot.contents;
+
+    overlay.style.overflow = "visible";
+    overlay.appendChild(editEl);
+
+    const commitEdit = async () => {
+      const text = editEl.textContent || "";
+      cleanup();
+      if (text !== (annot.contents || "")) {
+        // Save contents directly via RPC
+        if (this.undoManager) {
+          this.undoManager.push({ annotId, property: "contents", previousValue: annot.contents, newValue: text });
+        }
+        await this.viewport.getRpc().send({ type: "setAnnotContents", annotId, text });
+        const pageIndex = parseInt(annotId.split("-")[0]);
+        await this.viewport.rerenderPage(pageIndex);
+      }
+      this.onCreationDone?.();
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        commitEdit();
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        commitEdit();
+      }
+      e.stopPropagation(); // Prevent tool shortcuts while typing
+    };
+
+    const cleanup = () => {
+      editEl.removeEventListener("keydown", onKeyDown);
+      editEl.remove();
+      this.activeInlineEdit = null;
+    };
+
+    editEl.addEventListener("keydown", onKeyDown);
+
+    this.activeInlineEdit = { annotId, el: editEl, cleanup };
+
+    // Focus after appending
+    requestAnimationFrame(() => editEl.focus());
+  }
+
+  async cancelInlineEdit(): Promise<void> {
+    if (!this.activeInlineEdit) return;
+    const { annotId, el } = this.activeInlineEdit;
+    const text = el.textContent || "";
+    const annot = this.getAnnotationForId(annotId);
+    el.remove();
+    this.activeInlineEdit = null;
+
+    if (annot && text !== (annot.contents || "")) {
+      if (this.undoManager) {
+        this.undoManager.push({ annotId, property: "contents", previousValue: annot.contents, newValue: text });
+      }
+      await this.viewport.getRpc().send({ type: "setAnnotContents", annotId, text });
+      const pageIndex = parseInt(annotId.split("-")[0]);
+      await this.viewport.rerenderPage(pageIndex);
     }
     this.onCreationDone?.();
   }
@@ -829,12 +952,22 @@ export class InteractionLayer {
 
     div.addEventListener("pointerdown", (e) => {
       e.stopPropagation();
+      // Don't start drag if we're inline editing this annotation
+      if (this.activeInlineEdit?.annotId === annot.id && (e.target as HTMLElement).classList.contains("freetext-inline-edit")) return;
       this.select(annot.id);
       // Start drag (move)
       if (!(e.target as HTMLElement).classList.contains("resize-handle")) {
         this.startDrag(annot.id, e, null);
       }
     });
+
+    // Double-click to inline edit FreeText
+    if (annot.type === "FreeText") {
+      div.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        this.startInlineEdit(annot.id);
+      });
+    }
 
     return div;
   }

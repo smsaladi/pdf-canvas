@@ -659,4 +659,9 @@ function setupDragDrop(container: HTMLElement) {
 // Expose for E2E testing
 (window as any).__pdfCanvas = { openFile, saveFile, markDirty, isDirty: () => isDirty };
 
+// Register service worker for PWA support
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
+
 init();
