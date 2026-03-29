@@ -9,6 +9,7 @@ import { parseFontName, matchReferenceFont, fetchFont, augmentFont } from "./fon
 import { setDoc, getDoc } from "./worker/doc-state";
 import { buildGlyphMap, findMappingsForSelection, editMappedGlyphs } from "./content-map";
 import { getPageInfo, renderPage, getAnnotations, resolveAnnot, resolveWidget } from "./worker/helpers";
+import { readContentStreams, writeContentStreams, tryReplaceInStreams } from "./worker/stream-utils";
 
 const respond = createWorkerResponder(self);
 
@@ -273,17 +274,13 @@ self.onmessage = async function (e: MessageEvent) {
       // --- Text replacement (simple) ---
 
       case "replaceTextInStream": {
-        const pageObj = (getDoc().loadPage(request.page) as mupdf.PDFPage).getObject();
-        const contentsRef = pageObj.get("Contents");
+        const contentsRef = (getDoc().loadPage(request.page) as mupdf.PDFPage).getObject().get("Contents");
         let totalCount = 0;
-        const tryReplace = (ref: any) => {
-          if (!ref.isStream()) return false;
-          const { result, count } = replaceInStream(ref.readStream().asString(), request.oldText, request.newText, request.replaceAll ?? false);
-          if (count > 0) { ref.writeStream(result); totalCount += count; return true; }
-          return false;
-        };
-        if (contentsRef.isArray()) { for (let i = 0; i < contentsRef.length; i++) { if (tryReplace(contentsRef.get(i)) && !request.replaceAll) break; } }
-        else if (contentsRef.isStream()) tryReplace(contentsRef);
+        tryReplaceInStreams(contentsRef, (data) => {
+          const { result, count } = replaceInStream(data, request.oldText, request.newText, request.replaceAll ?? false);
+          if (count > 0) { totalCount += count; return result; }
+          return null;
+        });
         respond(_rpcId, { type: "textReplaced", page: request.page, count: totalCount }); break;
       }
 
