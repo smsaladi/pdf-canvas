@@ -74,13 +74,15 @@ function init() {
   };
 
   // Wire text edit commits
-  textLayer.onCommit(async (page, oldText, newText, _selection) => {
+  textLayer.onCommit(async (page, oldText, newText, _selection, styleOverride) => {
     console.log(`[TextEdit] Replacing "${oldText}" → "${newText}" on page ${page}`);
     const response = await rpc.send({
       type: "replaceTextSmart",
       page,
       oldText,
       newText,
+      boldOverride: styleOverride?.bold,
+      italicOverride: styleOverride?.italic,
     });
 
     if (response.type === "textReplacedSmart") {

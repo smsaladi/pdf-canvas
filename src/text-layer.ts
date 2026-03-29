@@ -10,11 +10,17 @@ export interface TextSelection {
   chars: Array<{ block: number; line: number; charIdx: number; info: CharInfo }>;
 }
 
+export interface TextStyleOverride {
+  bold?: boolean;  // undefined = keep original, true/false = override
+  italic?: boolean;
+}
+
 export type TextEditCommitListener = (
   page: number,
   oldText: string,
   newText: string,
-  selection: TextSelection
+  selection: TextSelection,
+  styleOverride?: TextStyleOverride
 ) => void;
 
 /** Test if a point (px, py) in PDF coords lies inside a quad */
@@ -114,6 +120,7 @@ export class TextLayer {
   private dragStart: { block: number; line: number; charIdx: number } | null = null;
   private clickCount = 0;
   private lastClickTime = 0;
+  private styleOverride: TextStyleOverride = {};
 
   constructor(viewport: Viewport) {
     this.viewport = viewport;
@@ -290,6 +297,9 @@ export class TextLayer {
     if (!this.currentSelection || this.currentSelection.chars.length === 0) return;
     this.cancelEdit();
 
+    // Reset style override to match original text
+    this.styleOverride = {};
+
     const sel = this.currentSelection;
     const scale = this.viewport.getScale();
     const container = this.viewport.getPageContainer(pageIndex);
@@ -331,6 +341,8 @@ export class TextLayer {
     overlay.style.color = firstChar.color.length >= 3
       ? `rgb(${firstChar.color[0] * 255}, ${firstChar.color[1] * 255}, ${firstChar.color[2] * 255})`
       : "black";
+    overlay.style.fontWeight = firstChar.fontFlags.isBold ? "bold" : "normal";
+    overlay.style.fontStyle = firstChar.fontFlags.isItalic ? "italic" : "normal";
     overlay.textContent = selectedText;
 
     // Handle commit on Enter or blur
@@ -343,9 +355,25 @@ export class TextLayer {
         e.preventDefault();
         this.cancelEdit();
       }
-      // Disable browser rich-text formatting (Ctrl+B/I/U) — not supported yet
-      if ((e.ctrlKey || e.metaKey) && ["b", "i", "u"].includes(e.key.toLowerCase())) {
+      // Bold/Italic toggle — changes the font variant used on commit
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
+        const origBold = sel.chars[0]?.info.fontFlags.isBold ?? false;
+        const currentBold = this.styleOverride.bold ?? origBold;
+        this.styleOverride.bold = !currentBold;
+        overlay.style.fontWeight = this.styleOverride.bold ? "bold" : "normal";
+        console.log(`[TextEdit] Bold toggled: ${this.styleOverride.bold}`);
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "i") {
+        e.preventDefault();
+        const origItalic = sel.chars[0]?.info.fontFlags.isItalic ?? false;
+        const currentItalic = this.styleOverride.italic ?? origItalic;
+        this.styleOverride.italic = !currentItalic;
+        overlay.style.fontStyle = this.styleOverride.italic ? "italic" : "normal";
+        console.log(`[TextEdit] Italic toggled: ${this.styleOverride.italic}`);
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "u") {
+        e.preventDefault(); // Underline not supported in content stream editing
       }
     });
     overlay.addEventListener("blur", () => {
@@ -382,10 +410,15 @@ export class TextLayer {
     this.editOverlay = null;
     this.clearHighlights();
 
-    if (newText !== oldText) {
-      console.log(`[TextEdit] Committing: "${oldText}" → "${newText}" (page ${page})`);
+    // Check if text changed OR style changed
+    const styleChanged = this.styleOverride.bold !== undefined || this.styleOverride.italic !== undefined;
+    if (newText !== oldText || styleChanged) {
+      const styleDesc = styleChanged
+        ? ` [style: ${this.styleOverride.bold !== undefined ? (this.styleOverride.bold ? "bold" : "unbold") : ""}${this.styleOverride.italic !== undefined ? (this.styleOverride.italic ? " italic" : " unitalic") : ""}]`
+        : "";
+      console.log(`[TextEdit] Committing: "${oldText}" → "${newText}" (page ${page})${styleDesc}`);
       for (const listener of this.commitListeners) {
-        listener(page, oldText, newText, selection);
+        listener(page, oldText, newText, selection, styleChanged ? this.styleOverride : undefined);
       }
     }
 

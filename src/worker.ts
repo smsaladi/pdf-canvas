@@ -511,11 +511,12 @@ self.onmessage = async function (e: MessageEvent) {
           return false;
         };
 
-        // --- Step 1: Check ALL characters in newText against page fonts ---
-        const allNewTextChars = [...new Set(request.newText)].filter(c => c.trim()); // unique non-whitespace chars
+        // --- Step 1: Check characters and style overrides ---
+        const allNewTextChars = [...new Set(request.newText)].filter(c => c.trim());
         let augmentedAnyFont = false;
+        const hasStyleOverride = request.boldOverride !== undefined || request.italicOverride !== undefined;
 
-        console.log(`[FontAugment] Checking ${allNewTextChars.length} unique chars in new text: "${allNewTextChars.join("")}"`);
+        console.log(`[FontAugment] Checking ${allNewTextChars.length} unique chars in new text: "${allNewTextChars.join("")}"${hasStyleOverride ? " [style override]" : ""}`);
 
         try {
           const resources = pageObj.get("Resources");
@@ -592,12 +593,15 @@ self.onmessage = async function (e: MessageEvent) {
 
                 console.log(`[FontAugment] /${fontKey} "${baseFontName}": present=[${presentInThisFont.join("")}] missing=[${missingInThisFont.join("")}]`);
 
-                if (missingInThisFont.length === 0) continue;
+                if (missingInThisFont.length === 0 && !hasStyleOverride) continue;
 
-                // Match and fetch reference font
+                // Match and fetch reference font, applying style overrides
                 const parsed = parseFontName(baseFontName);
                 const flags = descriptor.get("Flags")?.asNumber?.() || 0;
                 const match = matchReferenceFont(parsed, flags);
+                // Apply user style overrides (Ctrl+B/I)
+                if (request.boldOverride !== undefined) match.bold = request.boldOverride;
+                if (request.italicOverride !== undefined) match.italic = request.italicOverride;
                 const fontPath = getLocalFontPath(match);
                 console.log(`[FontAugment] Matched "${baseFontName}" → ${match.googleFamily} (${match.confidence}), fetching ${fontPath}`);
 
@@ -612,19 +616,28 @@ self.onmessage = async function (e: MessageEvent) {
                 }
                 console.log(`[FontAugment] Fetched reference font: ${(xhr.response as ArrayBuffer).byteLength} bytes`);
 
-                const augmented = augmentFont(subsetBuffer, xhr.response as ArrayBuffer, missingInThisFont);
-                if (augmented) {
-                  // Create a NEW mupdf.Font from the augmented TTF buffer
-                  const newFont = new mupdf.Font(baseFontName, augmented);
-                  // Embed it as a new PDF font resource (new object = new cache entry)
-                  const newFontResource = doc!.addSimpleFont(newFont, "Latin");
-                  // Replace the font entry in the page's Resources/Font dictionary
-                  fontDict.put(fontKey, newFontResource);
-                  console.log(`[FontAugment] ✓ Replaced /${fontKey} with new font resource (${augmented.byteLength} bytes, ${missingInThisFont.length} glyph(s): ${missingInThisFont.join(", ")})`);
-                  augmentedAnyFont = true;
+                let fontBufferToUse: ArrayBuffer;
+                if (missingInThisFont.length > 0) {
+                  const augmented = augmentFont(subsetBuffer, xhr.response as ArrayBuffer, missingInThisFont);
+                  if (augmented) {
+                    fontBufferToUse = augmented;
+                    console.log(`[FontAugment] Augmented with ${missingInThisFont.length} glyph(s): ${missingInThisFont.join(", ")}`);
+                  } else {
+                    console.warn(`[FontAugment] ✗ augmentFont() returned null`);
+                    continue;
+                  }
                 } else {
-                  console.warn(`[FontAugment] ✗ augmentFont() returned null`);
+                  // Style override only — use the reference font directly
+                  fontBufferToUse = xhr.response as ArrayBuffer;
+                  console.log(`[FontAugment] Using reference font directly for style change`);
                 }
+
+                // Create a NEW mupdf.Font and replace the dictionary entry
+                const newFont = new mupdf.Font(baseFontName, fontBufferToUse);
+                const newFontResource = doc!.addSimpleFont(newFont, "Latin");
+                fontDict.put(fontKey, newFontResource);
+                console.log(`[FontAugment] ✓ Replaced /${fontKey} with ${match.bold ? "Bold" : "Regular"} variant (${fontBufferToUse.byteLength} bytes)`);
+                augmentedAnyFont = true;
               } catch (fontErr) {
                 console.warn(`[FontAugment] Error processing font /${fontKey}:`, fontErr);
               }
