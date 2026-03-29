@@ -15,10 +15,12 @@
     "fixtures": "tsx scripts/create-fixtures.ts"
   },
   "dependencies": {
-    "mupdf": "^1.27.0"
+    "mupdf": "^1.27.0",
+    "opentype.js": "^1.3.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
+    "@types/opentype.js": "^1.3.9",
     "@vitest/coverage-v8": "^4.1.2",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",

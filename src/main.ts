@@ -75,22 +75,23 @@ function init() {
 
   // Wire text edit commits
   textLayer.onCommit(async (page, oldText, newText, _selection) => {
-    // Content stream replacement only — redact method disabled (too aggressive with overlapping content)
     console.log(`[TextEdit] Replacing "${oldText}" → "${newText}" on page ${page}`);
     const response = await rpc.send({
-      type: "replaceTextInStream",
+      type: "replaceTextSmart",
       page,
       oldText,
       newText,
     });
 
-    if (response.type === "textReplaced" && response.count > 0) {
-      console.log(`[TextEdit] ✓ Content stream edit succeeded (${response.count} replacement(s))`);
-      markDirty();
-      viewport.clearTextCache(page);
-      await viewport.rerenderPage(page);
-    } else {
-      console.warn(`[TextEdit] ✗ Could not find "${oldText}" in page ${page} content streams. This PDF may use font encodings that prevent direct text replacement.`);
+    if (response.type === "textReplacedSmart") {
+      if (response.count > 0) {
+        console.log(`[TextEdit] ✓ Success via ${response.method}`);
+        markDirty();
+        viewport.clearTextCache(page);
+        await viewport.rerenderPage(page);
+      } else {
+        console.warn(`[TextEdit] ✗ All methods failed for "${oldText}" on page ${page}. This PDF may use font encodings (Identity-H/CID) that prevent text replacement.`);
+      }
     }
   });
 

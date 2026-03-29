@@ -101,6 +101,7 @@ export type WorkerRequest =
   | { type: "setWidgetValue"; widgetId: string; value: string }
   | { type: "extractText"; page: number }
   | { type: "replaceTextInStream"; page: number; oldText: string; newText: string; replaceAll?: boolean }
+  | { type: "replaceTextSmart"; page: number; oldText: string; newText: string }
   | { type: "replaceTextViaRedact"; page: number; rect: [number, number, number, number]; newText: string; fontSize: number; fontFamily: string; color: number[] }
   | { type: "searchText"; needle: string; page?: number }
   | { type: "addImage"; page: number; rect: [number, number, number, number]; imageData: ArrayBuffer; mimeType: string }
@@ -119,5 +120,6 @@ export type WorkerResponse =
   | { type: "saved"; buffer: ArrayBuffer }
   | { type: "textExtracted"; page: number; data: PageTextData }
   | { type: "textReplaced"; page: number; count: number }
+  | { type: "textReplacedSmart"; page: number; count: number; method: "content-stream" | "font-augment" | "side-by-side" | "failed" }
   | { type: "searchResults"; results: TextSearchResult[] }
   | { type: "error"; message: string; requestType?: string };

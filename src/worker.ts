@@ -3,6 +3,7 @@ import * as mupdf from "mupdf";
 import { createWorkerResponder } from "./worker-rpc";
 import type { WorkerRequest, WorkerResponse, PageInfo, AnnotationDTO, TextBlock, TextLine, CharInfo, PageTextData, TextSearchResult } from "./types";
 import { replaceTextInStream as replaceInStream } from "./content-stream";
+import { parseFontName, matchReferenceFont, getLocalFontPath, augmentFont } from "./font-augment";
 
 const respond = createWorkerResponder(self);
 
@@ -482,6 +483,135 @@ self.onmessage = async function (e: MessageEvent) {
         break;
       }
 
+      case "replaceTextSmart": {
+        const page = doc!.loadPage(request.page) as mupdf.PDFPage;
+        const pageObj = page.getObject();
+
+        // --- Tier 0: Try simple content stream replacement ---
+        const contentsRef = pageObj.get("Contents");
+        let tier0Count = 0;
+
+        const tryStreamReplace = (streamRef: any): boolean => {
+          if (!streamRef.isStream()) return false;
+          const streamData = streamRef.readStream().asString();
+          const { result, count } = replaceInStream(streamData, request.oldText, request.newText);
+          if (count > 0) {
+            streamRef.writeStream(result);
+            return true;
+          }
+          return false;
+        };
+
+        if (contentsRef.isArray()) {
+          for (let i = 0; i < contentsRef.length; i++) {
+            if (tryStreamReplace(contentsRef.get(i))) { tier0Count++; break; }
+          }
+        } else if (contentsRef.isStream()) {
+          if (tryStreamReplace(contentsRef)) tier0Count++;
+        }
+
+        if (tier0Count > 0) {
+          respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: tier0Count, method: "content-stream" });
+          break;
+        }
+
+        // --- Tier 1: Font augmentation ---
+        // Find the font used for this text by checking page font resources
+        let tier1Success = false;
+        try {
+          const resources = pageObj.get("Resources");
+          const fontDict = resources.isNull() ? null : resources.get("Font");
+
+          if (fontDict && !fontDict.isNull()) {
+            // Try each font on the page
+            fontDict.forEach((fontObj: mupdf.PDFObject, fontKey: string | number) => {
+              if (tier1Success) return;
+              try {
+                const subtype = fontObj.get("Subtype").asName();
+                const baseFontName = fontObj.get("BaseFont").asName();
+                const encoding = fontObj.get("Encoding");
+                const encodingName = encoding.isName() ? encoding.asName() : "";
+
+                // Only augment TrueType fonts with standard encodings
+                if (subtype !== "TrueType") return;
+                if (encodingName !== "WinAnsiEncoding" && encodingName !== "MacRomanEncoding") return;
+
+                const descriptor = fontObj.get("FontDescriptor");
+                if (descriptor.isNull()) return;
+
+                const fontFile2 = descriptor.get("FontFile2");
+                if (!fontFile2.isStream()) return;
+
+                // Extract the subsetted font binary
+                const subsetBuf = fontFile2.readStream();
+                const subsetArray = subsetBuf.asUint8Array();
+                const subsetBuffer = new ArrayBuffer(subsetArray.byteLength);
+                new Uint8Array(subsetBuffer).set(subsetArray);
+
+                // Determine which chars are missing
+                const allChars = [...new Set(request.newText)];
+
+                // Match a reference font
+                const parsed = parseFontName(baseFontName);
+                const flags = descriptor.get("Flags")?.asNumber?.() || 0;
+                const match = matchReferenceFont(parsed, flags);
+
+                // Fetch reference font (synchronous in worker — use importScripts or pre-loaded)
+                // For now, use the bundled local fonts via synchronous XHR
+                const fontPath = getLocalFontPath(match);
+                const xhr = new XMLHttpRequest();
+                xhr.open("GET", fontPath, false); // synchronous
+                xhr.responseType = "arraybuffer";
+                xhr.send();
+
+                if (xhr.status !== 200 || !xhr.response) {
+                  console.warn(`[FontAugment] Failed to fetch reference font: ${fontPath}`);
+                  return;
+                }
+
+                const refBuffer = xhr.response as ArrayBuffer;
+                console.log(`[FontAugment] Matched "${baseFontName}" → ${match.googleFamily} (${match.confidence})`);
+
+                // Augment the font
+                const augmented = augmentFont(subsetBuffer, refBuffer, allChars);
+                if (!augmented) {
+                  console.log(`[FontAugment] No missing glyphs — all chars already in font`);
+                  return;
+                }
+
+                // Write the augmented font back to the PDF
+                fontFile2.writeStream(new Uint8Array(augmented));
+                console.log(`[FontAugment] ✓ Augmented font written back to PDF`);
+
+                // Now retry content stream replacement
+                if (contentsRef.isArray()) {
+                  for (let i = 0; i < contentsRef.length; i++) {
+                    if (tryStreamReplace(contentsRef.get(i))) { tier1Success = true; break; }
+                  }
+                } else if (contentsRef.isStream()) {
+                  if (tryStreamReplace(contentsRef)) tier1Success = true;
+                }
+              } catch (fontErr) {
+                console.warn(`[FontAugment] Error processing font ${fontKey}:`, fontErr);
+              }
+            });
+          }
+        } catch (err) {
+          console.warn("[FontAugment] Tier 1 failed:", err);
+        }
+
+        if (tier1Success) {
+          respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 1, method: "font-augment" });
+          break;
+        }
+
+        // --- Tier 2: Side-by-side font embedding ---
+        // (Disabled for now — can be re-enabled when positioning is fixed)
+        console.warn(`[TextEdit] All tiers failed for "${request.oldText}" on page ${request.page}`);
+        respond(_rpcId, { type: "textReplacedSmart", page: request.page, count: 0, method: "failed" });
+        break;
+      }
+
       case "searchText": {
         const results: TextSearchResult[] = [];
         const pageCount = doc!.countPages();
@@ -506,6 +636,8 @@ self.onmessage = async function (e: MessageEvent) {
       }
 
       case "save": {
+        // Strip unused glyphs from any augmented/embedded fonts
+        try { doc!.subsetFonts(); } catch {}
         const buf = doc!.saveToBuffer(request.options || "incremental");
         const bytes = buf.asUint8Array();
         const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
