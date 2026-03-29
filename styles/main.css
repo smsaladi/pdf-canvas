@@ -528,6 +528,18 @@ body {
   background: rgba(100, 149, 237, 0.15);
 }
 
+/* Page content image overlays */
+
+.image-overlay {
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+
+.image-overlay:hover {
+  border-color: rgba(74, 158, 255, 0.5);
+  background: rgba(74, 158, 255, 0.05);
+}
+
 /* Search bar */
 
 .search-bar {

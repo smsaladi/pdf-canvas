@@ -59,6 +59,11 @@ function init() {
           return;
         }
       }
+      if (annotation.type === "Image" && annotation.id.startsWith("img")) {
+        properties.show(annotation); // Shows image info in properties panel
+        if (fillColorWrap) fillColorWrap.style.opacity = "0.3";
+        return;
+      }
       properties.show(annotation);
       // Grey out fill color for types that don't support it
       if (fillColorWrap) {

@@ -71,6 +71,9 @@ export class InteractionLayer {
         case "widgetsLoaded":
           this.renderWidgetOverlaysForPage(event.page, event.widgets);
           break;
+        case "imagesLoaded":
+          this.renderImageOverlaysForPage(event.page, event.images);
+          break;
         case "pageLayoutChanged":
           this.rebuildAllOverlayContainers();
           break;
@@ -959,6 +962,47 @@ export class InteractionLayer {
     }
   }
 
+  private renderImageOverlaysForPage(pageIndex: number, images: import("./types").PageImageDTO[]): void {
+    const container = this.ensureOverlayContainer(pageIndex);
+    const scale = this.viewport.getScale();
+
+    // Remove old image overlays
+    const oldIds = new Set<string>();
+    for (const [id, el] of this.overlayElements) {
+      if (el.parentElement === container && id.startsWith("img")) oldIds.add(id);
+    }
+    for (const id of oldIds) {
+      this.overlayElements.get(id)?.remove();
+      this.overlayElements.delete(id);
+    }
+
+    for (const img of images) {
+      const screen = pdfRectToScreenRect(img.rect, { scale, pageOffsetX: 0, pageOffsetY: 0 });
+      const div = document.createElement("div");
+      div.className = "annot-overlay image-overlay";
+      div.dataset.annotId = img.id;
+      div.dataset.annotType = "Image";
+      div.style.left = `${screen.x}px`;
+      div.style.top = `${screen.y}px`;
+      div.style.width = `${screen.width}px`;
+      div.style.height = `${screen.height}px`;
+      div.title = `Image (${img.width}×${img.height})`;
+
+      div.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        this.select(img.id);
+      });
+
+      container.appendChild(div);
+      this.overlayElements.set(img.id, div);
+
+      if (img.id === this.selectedId) {
+        div.classList.add("selected");
+        this.addHandles(div);
+      }
+    }
+  }
+
   private createOverlay(annot: AnnotationDTO): HTMLDivElement | null {
     const scale = this.viewport.getScale();
 
@@ -1148,17 +1192,22 @@ export class InteractionLayer {
       const widgets = this.viewport.getWidgets(page.index);
       const widget = widgets.find((w) => w.id === id);
       if (widget) {
-        // Return a synthetic AnnotationDTO for the widget
         return {
-          id: widget.id,
-          page: widget.page,
-          type: "Widget",
-          rect: widget.rect,
-          color: [],
-          opacity: 1,
-          contents: "",
-          borderWidth: 1,
-          hasRect: true,
+          id: widget.id, page: widget.page, type: "Widget",
+          rect: widget.rect, color: [], opacity: 1, contents: "",
+          borderWidth: 1, hasRect: true,
+        };
+      }
+
+      // Also check page content images
+      const images = this.viewport.getPageImages(page.index);
+      const image = images.find((img) => img.id === id);
+      if (image) {
+        return {
+          id: image.id, page: image.page, type: "Image",
+          rect: image.rect, color: [], opacity: 1,
+          contents: `Image (${image.width}×${image.height})`,
+          borderWidth: 0, hasRect: true,
         };
       }
     }

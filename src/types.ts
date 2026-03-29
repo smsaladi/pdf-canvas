@@ -35,6 +35,14 @@ export interface WidgetDTO {
   rect: [number, number, number, number];
 }
 
+export interface PageImageDTO {
+  id: string;
+  page: number;
+  rect: [number, number, number, number];
+  width: number;   // natural image width in pixels
+  height: number;   // natural image height in pixels
+}
+
 export interface PageInfo {
   index: number;
   width: number;
@@ -104,6 +112,8 @@ export type WorkerRequest =
   | { type: "createAnnot"; page: number; annotType: string; rect: [number, number, number, number]; properties?: Partial<AnnotationDTO> }
   | { type: "deleteAnnot"; annotId: string }
   | { type: "setWidgetValue"; widgetId: string; value: string }
+  | { type: "getPageImages"; page: number }
+  | { type: "exportImage"; page: number; imageIndex: number }
   | { type: "extractText"; page: number }
   | { type: "replaceTextInStream"; page: number; oldText: string; newText: string; replaceAll?: boolean }
   | { type: "replaceTextSmart"; page: number; oldText: string; newText: string; boldOverride?: boolean; italicOverride?: boolean; fontName?: string }

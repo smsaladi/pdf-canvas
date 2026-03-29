@@ -1,7 +1,7 @@
 // Viewport: continuous scroll, zoom, lazy page rendering
 
 import { WorkerRPC } from "./worker-rpc";
-import type { PageInfo, AnnotationDTO, WidgetDTO, PageTextData } from "./types";
+import type { PageInfo, AnnotationDTO, WidgetDTO, PageTextData, PageImageDTO } from "./types";
 import { clampZoom } from "./coords";
 
 const PAGE_GAP = 16; // px between pages
@@ -11,6 +11,7 @@ export type ViewportEvent =
   | { type: "annotationsLoaded"; page: number; annotations: AnnotationDTO[] }
   | { type: "widgetsLoaded"; page: number; widgets: WidgetDTO[] }
   | { type: "textExtracted"; page: number; data: PageTextData }
+  | { type: "imagesLoaded"; page: number; images: PageImageDTO[] }
   | { type: "zoomChanged"; scale: number }
   | { type: "pageLayoutChanged" };
 
@@ -28,6 +29,7 @@ export class Viewport {
   private renderedAtScale = new Map<number, number>();
   private annotationCache = new Map<number, AnnotationDTO[]>();
   private widgetCache = new Map<number, WidgetDTO[]>();
+  private imageCache = new Map<number, PageImageDTO[]>();
   private textCache = new Map<number, PageTextData>();
   private pendingAnnotFetches = new Set<number>();
   private zoomDisplay: HTMLElement | null = null;
@@ -98,6 +100,10 @@ export class Viewport {
 
   getWidgets(pageIndex: number): WidgetDTO[] {
     return this.widgetCache.get(pageIndex) || [];
+  }
+
+  getPageImages(pageIndex: number): PageImageDTO[] {
+    return this.imageCache.get(pageIndex) || [];
   }
 
   getTextData(pageIndex: number): PageTextData | null {
@@ -222,6 +228,15 @@ export class Viewport {
       this.widgetCache.set(pageIndex, wResponse.widgets);
       this.emit({ type: "widgetsLoaded", page: pageIndex, widgets: wResponse.widgets });
     }
+
+    // Also refresh page content images
+    try {
+      const iResponse = await this.rpc.send({ type: "getPageImages", page: pageIndex });
+      if ((iResponse as any).type === "pageImages") {
+        this.imageCache.set(pageIndex, (iResponse as any).images);
+        this.emit({ type: "imagesLoaded", page: pageIndex, images: (iResponse as any).images });
+      }
+    } catch {}
 
     return this.annotationCache.get(pageIndex) || [];
   }

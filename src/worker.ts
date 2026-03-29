@@ -161,6 +161,75 @@ self.onmessage = async function (e: MessageEvent) {
         respond(_rpcId, { type: "annotCreated", annot: getAnnotations(request.page).at(-1)! }); break;
       }
 
+      // --- Page image extraction ---
+
+      case "getPageImages": {
+        const page = getDoc().loadPage(request.page);
+        const stext = page.toStructuredText();
+        const images: import("./types").PageImageDTO[] = [];
+        let imgIdx = 0;
+
+        stext.walk({
+          onImageBlock(bbox: any, _transform: any, image: any) {
+            images.push({
+              id: `img${request.page}-${imgIdx++}`,
+              page: request.page,
+              rect: bbox as [number, number, number, number],
+              width: image.getWidth(),
+              height: image.getHeight(),
+            });
+          },
+        } as any);
+
+        respond(_rpcId, { type: "pageImages", page: request.page, images } as any);
+        break;
+      }
+
+      case "exportImage": {
+        const page = getDoc().loadPage(request.page);
+        const stext = page.toStructuredText();
+        let targetImage: any = null;
+        let imgIdx = 0;
+
+        stext.walk({
+          onImageBlock(_bbox: any, _transform: any, image: any) {
+            if (imgIdx === request.imageIndex) {
+              targetImage = image;
+            }
+            imgIdx++;
+          },
+        } as any);
+
+        if (targetImage) {
+          const pixmap = targetImage.toPixmap();
+          const w = pixmap.getWidth();
+          const h = pixmap.getHeight();
+          const pixels = pixmap.getPixels();
+          // Convert to RGBA for browser
+          const numComponents = targetImage.getNumberOfComponents();
+          let rgba: Uint8ClampedArray;
+          if (numComponents === 4) {
+            rgba = new Uint8ClampedArray(pixels);
+          } else if (numComponents === 3) {
+            rgba = new Uint8ClampedArray(w * h * 4);
+            for (let i = 0, j = 0; i < pixels.length; i += 3, j += 4) {
+              rgba[j] = pixels[i]; rgba[j+1] = pixels[i+1]; rgba[j+2] = pixels[i+2]; rgba[j+3] = 255;
+            }
+          } else {
+            rgba = new Uint8ClampedArray(w * h * 4);
+            for (let i = 0, j = 0; i < pixels.length; i++, j += 4) {
+              rgba[j] = rgba[j+1] = rgba[j+2] = pixels[i]; rgba[j+3] = 255;
+            }
+          }
+          const imageData = new ImageData(new Uint8ClampedArray(rgba.buffer as ArrayBuffer), w, h);
+          const bitmap = await createImageBitmap(imageData);
+          respond(_rpcId, { type: "imageExported", bitmap, width: w, height: h } as any, [bitmap]);
+        } else {
+          respond(_rpcId, { type: "error", message: "Image not found" });
+        }
+        break;
+      }
+
       // --- Text extraction ---
 
       case "extractText": {
