@@ -6,6 +6,7 @@ import {
   encodeHexString,
   extractTextOccurrences,
   replaceTextInStream,
+  replaceTextWithFontSwitch,
   getAllText,
 } from "./content-stream";
 
@@ -238,5 +239,64 @@ describe("getAllText", () => {
   it("includes TJ array text", () => {
     const stream = "BT [(Hel) 20 (lo)] TJ ET";
     expect(getAllText(stream)).toBe("Hello");
+  });
+});
+
+describe("replaceTextWithFontSwitch", () => {
+  it("inserts font switch operators around replaced text in a Tj stream", () => {
+    const stream = "BT /F1 12 Tf 100 700 Td (Hello World) Tj ET";
+    const { result, count } = replaceTextWithFontSwitch(stream, "Hello", "Hola", "F2");
+    expect(count).toBe(1);
+    // Should contain a switch to F2, the replacement text, and a switch back to F1
+    expect(result).toContain("/F2 12 Tf");
+    expect(result).toContain("/F1 12 Tf");
+    expect(result).toContain("Hola");
+    expect(result).not.toContain("Hello");
+  });
+
+  it("finds the original font name from the most recent Tf operator", () => {
+    // Two Tf operators — the one closest to the text should be used
+    const stream = "BT /TT0 10 Tf (First) Tj /TT3 14 Tf (Target text) Tj ET";
+    const { result, count } = replaceTextWithFontSwitch(stream, "Target", "Replaced", "AugFont");
+    expect(count).toBe(1);
+    // Should restore to TT3 (the font active when "Target text" was shown), not TT0
+    expect(result).toContain("/AugFont 14 Tf");
+    expect(result).toContain("/TT3 14 Tf");
+  });
+
+  it("handles TJ arrays with kerning values", () => {
+    const stream = "BT /F1 12 Tf 72 700 Td [(H) 20 (ello) -10 ( World)] TJ ET";
+    const { result, count } = replaceTextWithFontSwitch(stream, "Hello", "Hola", "F2");
+    expect(count).toBe(1);
+    // Should switch to F2 for the replacement, then restore F1
+    expect(result).toContain("/F2 12 Tf");
+    expect(result).toContain("/F1 12 Tf");
+    // The concatenated text from the TJ array "Hello World" should now have "Hola" replacing "Hello"
+    expect(result).toContain("Hola");
+  });
+
+  it("preserves font size from the preceding Tf operator", () => {
+    const stream = "BT /MyFont 18.5 Tf (Some text here) Tj ET";
+    const { result } = replaceTextWithFontSwitch(stream, "Some", "New", "BoldFont");
+    // Should use 18.5 as the size for both the new font and the restore
+    expect(result).toContain("/BoldFont 18.5 Tf");
+    expect(result).toContain("/MyFont 18.5 Tf");
+  });
+
+  it("returns count=0 when oldText is not found", () => {
+    const stream = "BT /F1 12 Tf (Hello) Tj ET";
+    const { result, count } = replaceTextWithFontSwitch(stream, "Goodbye", "Hi", "F2");
+    expect(count).toBe(0);
+    expect(result).toBe(stream);
+  });
+
+  it("defaults to TT0/12 when no preceding Tf operator exists", () => {
+    // Edge case: no Tf before the text operator
+    const stream = "BT (Orphan text) Tj ET";
+    const { result, count } = replaceTextWithFontSwitch(stream, "Orphan", "Found", "NewFont");
+    expect(count).toBe(1);
+    // Should fall back to default TT0 and size 12
+    expect(result).toContain("/NewFont 12 Tf");
+    expect(result).toContain("/TT0 12 Tf");
   });
 });

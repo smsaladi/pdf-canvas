@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import * as mupdf from "mupdf";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { replaceTextInStream, extractTextOccurrences, getAllText } from "../../src/content-stream";
+import { replaceTextInStream, replaceTextWithFontSwitch, extractTextOccurrences, getAllText } from "../../src/content-stream";
 
 const FIXTURES = path.join(import.meta.dirname, "..", "fixtures");
 
@@ -167,5 +167,63 @@ describe("Content stream text replacement", () => {
     const { result, count } = replaceTextInStream(stream, "2024", "2025", true);
     expect(count).toBe(1); // "2024" appears once in "January 15, 2024"
     expect(result).toContain("2025");
+  });
+});
+
+describe("Content stream font-switch replacement with save/reload", () => {
+  it("font-switch replacement persists through save and reload", () => {
+    const doc = loadFixture("with-text.pdf");
+    const page = doc.loadPage(0) as mupdf.PDFPage;
+    const pageObj = page.getObject();
+    const contentsObj = pageObj.get("Contents");
+    const stream = contentsObj.readStream().asString();
+
+    // Replace "John Smith" with a font switch to a different font name
+    const { result, count } = replaceTextWithFontSwitch(
+      stream, "John Smith", "Jane Doe", "AugmentedF1"
+    );
+    expect(count).toBe(1);
+
+    // Verify the result contains font-switching operators
+    expect(result).toContain("/AugmentedF1");
+    expect(result).toContain("Tf");
+
+    // Write the modified stream back to the page
+    contentsObj.writeStream(result);
+
+    // Save the document
+    const buf = doc.saveToBuffer("compress");
+    const savedBytes = buf.asUint8Array();
+    expect(savedBytes.byteLength).toBeGreaterThan(0);
+
+    // Reload and verify the replacement text is present
+    const doc2 = new mupdf.PDFDocument(savedBytes);
+    const page2 = doc2.loadPage(0);
+    const text2 = page2.toStructuredText().asText();
+    expect(text2).toContain("Jane Doe");
+    expect(text2).not.toContain("John Smith");
+  });
+
+  it("font-switch operators are present in the reloaded content stream", () => {
+    const doc = loadFixture("with-text.pdf");
+    const page = doc.loadPage(0) as mupdf.PDFPage;
+    const contentsObj = page.getObject().get("Contents");
+    const stream = contentsObj.readStream().asString();
+
+    const { result } = replaceTextWithFontSwitch(
+      stream, "Invoice #12345", "Invoice #99999", "BoldArimo"
+    );
+    contentsObj.writeStream(result);
+
+    // Save and reload
+    const buf = doc.saveToBuffer("compress");
+    const doc2 = new mupdf.PDFDocument(buf.asUint8Array());
+    const page2 = doc2.loadPage(0) as mupdf.PDFPage;
+    const stream2 = page2.getObject().get("Contents").readStream().asString();
+
+    // The reloaded stream should still contain the font-switch operators
+    expect(stream2).toContain("/BoldArimo");
+    expect(stream2).toContain("Tf");
+    expect(stream2).toContain("Invoice #99999");
   });
 });

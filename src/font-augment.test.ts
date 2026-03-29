@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseFontName, matchReferenceFont } from "./font-augment";
+import { parseFontName, matchReferenceFont, getLocalFontPath } from "./font-augment";
 
 describe("parseFontName", () => {
   it("strips subset prefix", () => {
@@ -105,5 +105,63 @@ describe("matchReferenceFont", () => {
     const match = matchReferenceFont(parsed);
     expect(match.googleFamily).toBe("Arimo");
     expect(match.confidence).toBe("category-fallback");
+  });
+});
+
+describe("getLocalFontPath", () => {
+  it("returns correct path for Arimo Regular", () => {
+    const match = matchReferenceFont(parseFontName("Helvetica"));
+    expect(getLocalFontPath(match)).toBe("/fonts/Arimo-Regular.ttf");
+  });
+
+  it("returns correct path for Arimo Bold", () => {
+    const match = matchReferenceFont(parseFontName("Helvetica-Bold"));
+    expect(getLocalFontPath(match)).toBe("/fonts/Arimo-Bold.ttf");
+  });
+
+  it("returns correct path for Arimo Italic", () => {
+    const match = matchReferenceFont(parseFontName("Arial-ItalicMT"));
+    expect(getLocalFontPath(match)).toBe("/fonts/Arimo-Italic.ttf");
+  });
+
+  it("returns correct path for Arimo BoldItalic", () => {
+    const match = matchReferenceFont(parseFontName("ABCDEF+Arial-BoldItalicMT"));
+    expect(getLocalFontPath(match)).toBe("/fonts/Arimo-BoldItalic.ttf");
+  });
+
+  it("returns correct path for Tinos Regular (serif)", () => {
+    const match = matchReferenceFont(parseFontName("TimesNewRomanPSMT"));
+    expect(getLocalFontPath(match)).toBe("/fonts/Tinos-Regular.ttf");
+  });
+
+  it("returns correct path for Tinos Bold", () => {
+    const match = matchReferenceFont(parseFontName("TimesNewRomanPS-BoldMT"));
+    expect(getLocalFontPath(match)).toBe("/fonts/Tinos-Bold.ttf");
+  });
+
+  it("returns correct path for Cousine Regular (mono)", () => {
+    const match = matchReferenceFont(parseFontName("CourierNewPSMT"));
+    expect(getLocalFontPath(match)).toBe("/fonts/Cousine-Regular.ttf");
+  });
+
+  it("returns correct path for Cousine Bold", () => {
+    const match = matchReferenceFont(parseFontName("CourierNew-Bold"));
+    expect(getLocalFontPath(match)).toBe("/fonts/Cousine-Bold.ttf");
+  });
+
+  it("falls back to Arimo for unknown font families", () => {
+    const match = matchReferenceFont(parseFontName("TotallyUnknownFont"));
+    expect(getLocalFontPath(match)).toBe("/fonts/Arimo-Regular.ttf");
+  });
+
+  it("falls back to Arimo Bold for unknown bold font", () => {
+    const match = matchReferenceFont(parseFontName("TotallyUnknown-Bold"));
+    expect(getLocalFontPath(match)).toBe("/fonts/Arimo-Bold.ttf");
+  });
+
+  it("Carlito (Calibri match) falls back to Arimo path", () => {
+    // Carlito is not Arimo/Tinos/Cousine, so hits the default branch
+    const match = matchReferenceFont(parseFontName("Calibri"));
+    expect(getLocalFontPath(match)).toBe("/fonts/Arimo-Regular.ttf");
   });
 });
