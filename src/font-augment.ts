@@ -4,6 +4,7 @@
 // Uses opentype.js for font binary parsing and glyph manipulation.
 
 import opentype from "opentype.js";
+import { Font as FEFont, woff2 } from "fonteditor-core";
 
 // --- Font name parsing ---
 
@@ -170,13 +171,12 @@ export function getLocalFontPath(match: FontMatchResult): string {
 // --- Font augmentation with opentype.js ---
 
 /**
- * Augment a subsetted font by adding missing glyph outlines from a reference font.
- * Only adds glyphs that don't already exist in the subset — preserving original glyphs.
+ * Augment a subsetted font by injecting missing glyph outlines from a reference font.
+ * Uses fonteditor-core to modify the font IN-PLACE, preserving the original TrueType
+ * format (glyf table structure) so MuPDF can read it correctly.
  *
- * @param subsetBuffer - Raw TTF binary of the subsetted font from the PDF
- * @param referenceBuffer - Raw TTF binary of the full reference font
- * @param missingChars - Array of characters whose glyphs need to be added
- * @returns Augmented TTF binary, or null if augmentation failed
+ * opentype.js is used only to extract glyph outlines from the reference font.
+ * fonteditor-core handles the actual font binary modification.
  */
 export function augmentFont(
   subsetBuffer: ArrayBuffer,
@@ -184,116 +184,120 @@ export function augmentFont(
   missingChars: string[]
 ): ArrayBuffer | null {
   try {
-    const subset = opentype.parse(subsetBuffer);
-    const reference = opentype.parse(referenceBuffer);
+    // Parse the subset font with fonteditor-core (preserves TrueType format)
+    const subsetFont = FEFont.create(new Uint8Array(subsetBuffer) as any, { type: "ttf" });
+    const subsetData = subsetFont.get();
 
-    if (!subset || !reference) return null;
-
-    // Collect all existing glyphs, tracking which unicodes have REAL outlines
-    const glyphs: opentype.Glyph[] = [];
-    const unicodesWithOutlines = new Set<number>();
-    const emptyGlyphIndices = new Set<number>(); // glyphs with unicode but no path
-
-    for (let i = 0; i < subset.glyphs.length; i++) {
-      const g = subset.glyphs.get(i);
-      glyphs.push(g);
-      if (g.unicode !== undefined && g.unicode !== null) {
-        const hasPath = g.path && g.path.commands && g.path.commands.length > 0;
-        if (hasPath) {
-          unicodesWithOutlines.add(g.unicode);
-        } else {
-          emptyGlyphIndices.add(i);
-        }
-      }
+    if (!subsetData || !subsetData.glyf) {
+      console.warn("[FontAugment] Could not parse subset font with fonteditor-core");
+      return null;
     }
 
-    console.log(`[FontAugment] Subset has ${glyphs.length} glyphs, ${unicodesWithOutlines.size} with outlines, ${emptyGlyphIndices.size} empty`);
+    console.log(`[FontAugment] fonteditor-core parsed subset: ${subsetData.glyf.length} glyphs, unitsPerEm=${subsetData.head?.unitsPerEm}`);
 
-    // Scale factor if unitsPerEm differs
-    const scaleFactor = subset.unitsPerEm / reference.unitsPerEm;
+    // Parse the reference font with opentype.js (good at extracting glyph paths)
+    const reference = opentype.parse(referenceBuffer);
+    if (!reference) {
+      console.warn("[FontAugment] Could not parse reference font with opentype.js");
+      return null;
+    }
+
+    const subsetUPM = subsetData.head?.unitsPerEm || 2048;
+    const refUPM = reference.unitsPerEm;
+    const scale = subsetUPM / refUPM;
+
+    // Build a map: unicode → glyph index in the subset font
+    const cmap = subsetData.cmap || {};
     let addedCount = 0;
 
     for (const char of missingChars) {
       const codePoint = char.codePointAt(0);
       if (codePoint === undefined) continue;
 
-      // Skip if this unicode already has a real outline in the subset
-      if (unicodesWithOutlines.has(codePoint)) continue;
-
-      const refGlyph = reference.charToGlyph(char);
-      if (!refGlyph || !refGlyph.path || refGlyph.path.commands.length === 0) {
-        console.warn(`[FontAugment] Reference font has no outline for "${char}" either`);
+      // Find the glyph index for this codepoint in the subset
+      const glyphIndex = cmap[codePoint];
+      if (glyphIndex === undefined || glyphIndex === null) {
+        console.log(`[FontAugment] No cmap entry for "${char}" (U+${codePoint.toString(16).padStart(4, "0")}) — cannot inject`);
         continue;
       }
 
-      // Scale the glyph path if needed
-      let path = refGlyph.path;
-      if (Math.abs(scaleFactor - 1) > 0.001) {
-        path = new opentype.Path();
-        for (const cmd of refGlyph.path.commands) {
-          const scaled: any = { type: cmd.type };
-          if ("x" in cmd) scaled.x = (cmd as any).x * scaleFactor;
-          if ("y" in cmd) scaled.y = (cmd as any).y * scaleFactor;
-          if ("x1" in cmd) scaled.x1 = (cmd as any).x1 * scaleFactor;
-          if ("y1" in cmd) scaled.y1 = (cmd as any).y1 * scaleFactor;
-          if ("x2" in cmd) scaled.x2 = (cmd as any).x2 * scaleFactor;
-          if ("y2" in cmd) scaled.y2 = (cmd as any).y2 * scaleFactor;
-          path.commands.push(scaled);
+      // Check if the glyph at this index is empty
+      const existingGlyph = subsetData.glyf[glyphIndex];
+      if (existingGlyph && existingGlyph.contours && existingGlyph.contours.length > 0) {
+        // Already has outlines — skip
+        continue;
+      }
+
+      // Get the glyph from the reference font
+      const refGlyph = reference.charToGlyph(char);
+      if (!refGlyph || !refGlyph.path || refGlyph.path.commands.length === 0) {
+        console.warn(`[FontAugment] Reference font has no outline for "${char}"`);
+        continue;
+      }
+
+      // Convert opentype.js path commands to fonteditor-core contour format
+      // fonteditor-core uses contours: Array<Array<{x, y, onCurve}>>
+      const contours: Array<Array<{ x: number; y: number; onCurve: boolean }>> = [];
+      let currentContour: Array<{ x: number; y: number; onCurve: boolean }> = [];
+
+      for (const cmd of refGlyph.path.commands) {
+        switch (cmd.type) {
+          case "M":
+            if (currentContour.length > 0) contours.push(currentContour);
+            currentContour = [{ x: Math.round((cmd as any).x * scale), y: Math.round((cmd as any).y * scale), onCurve: true }];
+            break;
+          case "L":
+            currentContour.push({ x: Math.round((cmd as any).x * scale), y: Math.round((cmd as any).y * scale), onCurve: true });
+            break;
+          case "Q":
+            // Quadratic bezier: control point (off-curve) then end point (on-curve)
+            currentContour.push({ x: Math.round((cmd as any).x1 * scale), y: Math.round((cmd as any).y1 * scale), onCurve: false });
+            currentContour.push({ x: Math.round((cmd as any).x * scale), y: Math.round((cmd as any).y * scale), onCurve: true });
+            break;
+          case "C":
+            // Cubic bezier: two control points then end point
+            // TrueType only supports quadratic — approximate by using control points as off-curve
+            currentContour.push({ x: Math.round((cmd as any).x1 * scale), y: Math.round((cmd as any).y1 * scale), onCurve: false });
+            currentContour.push({ x: Math.round((cmd as any).x2 * scale), y: Math.round((cmd as any).y2 * scale), onCurve: false });
+            currentContour.push({ x: Math.round((cmd as any).x * scale), y: Math.round((cmd as any).y * scale), onCurve: true });
+            break;
+          case "Z":
+            if (currentContour.length > 0) contours.push(currentContour);
+            currentContour = [];
+            break;
         }
       }
+      if (currentContour.length > 0) contours.push(currentContour);
 
-      // Find the existing empty glyph for this codepoint and REPLACE it
-      // (rather than adding a duplicate unicode mapping)
-      let replaced = false;
-      for (let i = 0; i < glyphs.length; i++) {
-        if (glyphs[i].unicode === codePoint && emptyGlyphIndices.has(i)) {
-          // Replace the empty glyph in-place
-          glyphs[i] = new opentype.Glyph({
-            name: refGlyph.name || glyphs[i].name || `uni${codePoint.toString(16).padStart(4, "0")}`,
-            unicode: codePoint,
-            advanceWidth: Math.round((refGlyph.advanceWidth || 0) * scaleFactor),
-            path,
-          });
-          replaced = true;
-          console.log(`[FontAugment] Replaced empty glyph at index ${i} for "${char}" (${refGlyph.path.commands.length} path cmds)`);
-          break;
-        }
-      }
+      // Replace the glyph data at the correct index
+      subsetData.glyf[glyphIndex] = {
+        ...existingGlyph,
+        contours,
+        advanceWidth: Math.round((refGlyph.advanceWidth || 0) * scale),
+        leftSideBearing: 0,
+        xMin: 0,
+        yMin: 0,
+        xMax: Math.round((refGlyph.advanceWidth || 0) * scale),
+        yMax: subsetUPM,
+      };
 
-      if (!replaced) {
-        // No existing empty glyph — append new one
-        glyphs.push(new opentype.Glyph({
-          name: refGlyph.name || `uni${codePoint.toString(16).padStart(4, "0")}`,
-          unicode: codePoint,
-          advanceWidth: Math.round((refGlyph.advanceWidth || 0) * scaleFactor),
-          path,
-        }));
-        console.log(`[FontAugment] Appended new glyph for "${char}" (${refGlyph.path.commands.length} path cmds)`);
-      }
-
-      unicodesWithOutlines.add(codePoint);
+      console.log(`[FontAugment] Injected glyph at index ${glyphIndex} for "${char}" (${contours.length} contours, ${contours.reduce((s, c) => s + c.length, 0)} points)`);
       addedCount++;
     }
 
     if (addedCount === 0) {
-      console.log(`[FontAugment] No glyphs needed augmentation`);
+      console.log(`[FontAugment] No glyphs needed injection`);
       return null;
     }
 
-    // Rebuild font with all glyphs (original + new)
-    const augmented = new opentype.Font({
-      familyName: subset.names.fontFamily?.en || "AugmentedFont",
-      styleName: subset.names.fontSubfamily?.en || "Regular",
-      unitsPerEm: subset.unitsPerEm,
-      ascender: subset.ascender,
-      descender: subset.descender,
-      glyphs,
-    });
+    // Write the modified font back as TTF (preserves original format!)
+    subsetFont.set(subsetData);
+    const outputBuffer = subsetFont.write({ type: "ttf" });
 
-    console.log(`[FontAugment] Added ${addedCount} glyph(s) to font: ${missingChars.join(", ")}`);
-    return augmented.toArrayBuffer();
+    console.log(`[FontAugment] Wrote augmented TTF: ${outputBuffer.byteLength} bytes, injected ${addedCount} glyph(s)`);
+    return outputBuffer;
   } catch (err) {
-    console.warn("[FontAugment] opentype.js augmentation failed:", err);
+    console.warn("[FontAugment] Font augmentation failed:", err);
     return null;
   }
 }
