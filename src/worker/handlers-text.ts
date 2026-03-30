@@ -231,8 +231,8 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
                             const origGlyphCount = origData?.glyf?.length || 0;
                             const origCmap = origData?.cmap || {};
 
-                            // forceNewSlots=true: CID font cmap is unreliable for subsetted fonts
-                            const augmented = augmentFont(fontBuf, refBuf, missingFromCmap, true);
+                            // CID font: create new slots (cmap is unreliable for subsetted fonts)
+                            const augmented = augmentFont(fontBuf, refBuf, missingFromCmap, "new-slots");
                             if (augmented) {
                               // Write augmented font bytes directly to the FontFile2 stream
                               // This preserves the Type0 font structure (ToUnicode, CIDFont, etc.)
@@ -514,8 +514,12 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
           if (!refBuffer) continue;
           let fontBufferToUse: ArrayBuffer;
           if (missingInThisFont.length > 0) {
+            // For WinAnsi subsetted fonts: overwrite glyphs at existing cmap positions.
+            // The Encoding/Differences array maps byte values → glyph names → cmap indices.
+            // We must inject at EXISTING positions so the Encoding chain still works.
+            // "overwrite" mode reuses cmap slots but replaces the glyph outlines.
             const isSubsetted = /^[A-Z]{6}\+/.test(baseFontName);
-            const augmented = augmentFont(subsetBuffer, refBuffer, missingInThisFont, isSubsetted);
+            const augmented = augmentFont(subsetBuffer, refBuffer, missingInThisFont, isSubsetted ? "overwrite" : false);
             if (!augmented) continue;
             fontBufferToUse = augmented;
             console.log(`[FontAugment] Augmented ${missingInThisFont.length} glyph(s)`);

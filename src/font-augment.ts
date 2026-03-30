@@ -365,10 +365,10 @@ export function augmentFont(
   subsetBuffer: ArrayBuffer,
   referenceBuffer: ArrayBuffer,
   missingChars: string[],
-  /** When true, always create new glyph slots instead of reusing existing cmap entries.
-   *  Use this for CID/Type0 fonts where the font's internal cmap is unreliable
-   *  (subsetted fonts map codepoints to arbitrary glyph indices). */
-  forceNewSlots = false
+  /** "new-slots": always create new glyph slots (CID/Type0 fonts).
+   *  "overwrite": reuse existing cmap slots but overwrite outlines (WinAnsi subsetted fonts).
+   *  false: reuse existing slots, skip if glyph has outlines (non-subsetted fonts). */
+  forceMode: boolean | "new-slots" | "overwrite" = false
 ): ArrayBuffer | null {
   try {
     // Parse the subset font with fonteditor-core (preserves TrueType format)
@@ -406,23 +406,26 @@ export function augmentFont(
       // Find or create a glyph slot for this character.
       let glyphIndex: number;
       const existingIndex = cmap[codePoint];
+      const useNewSlots = forceMode === true || forceMode === "new-slots";
+      const overwrite = forceMode === "overwrite";
 
-      if (!forceNewSlots && existingIndex !== undefined && existingIndex !== null) {
-        // For simple fonts (WinAnsi), the cmap is reliable — reuse if glyph has outlines
-        const existingGlyph = subsetData.glyf[existingIndex];
-        if (existingGlyph?.contours?.length > 0) {
-          continue; // Already has correct outlines
-        }
-        glyphIndex = existingIndex;
-      } else {
-        // For CID fonts (forceNewSlots=true) or missing cmap entry:
-        // always create a new slot. In subsetted CID fonts the internal cmap
-        // maps codepoints to arbitrary glyph indices, so existing entries
-        // are unreliable — the glyph at cmap[0x59] is NOT necessarily "Y".
+      if (useNewSlots || existingIndex === undefined || existingIndex === null) {
+        // CID fonts or missing cmap entry: create new slot
         glyphIndex = subsetData.glyf.length;
         subsetData.glyf.push({ contours: [], xMin: 0, yMin: 0, xMax: 0, yMax: 0, advanceWidth: 0, leftSideBearing: 0, name: "" } as any);
         cmap[codePoint] = glyphIndex;
         console.log(`[FontAugment] New glyph slot at index ${glyphIndex} for "${char}" (U+${codePoint.toString(16).padStart(4, "0")})`);
+      } else if (overwrite) {
+        // WinAnsi subsetted: reuse existing cmap slot, overwrite outlines
+        glyphIndex = existingIndex;
+        console.log(`[FontAugment] Overwriting glyph at index ${glyphIndex} for "${char}" (U+${codePoint.toString(16).padStart(4, "0")})`);
+      } else {
+        // Non-subsetted: reuse if glyph already has outlines
+        const existingGlyph = subsetData.glyf[existingIndex];
+        if (existingGlyph?.contours?.length > 0) {
+          continue;
+        }
+        glyphIndex = existingIndex;
       }
 
       // Get the glyph from the reference font
