@@ -193,25 +193,38 @@ export class InteractionLayer implements InteractionContext {
     const rpc = this.viewport.getRpc();
     const pagesToRerender = new Set<number>();
 
-    for (const annot of allAnnots) {
-      if (this.undoManager) {
-        this.undoManager.push({
-          annotId: annot.id,
-          property: "delete",
-          previousValue: annot,
-          newValue: null,
-        });
-      }
-      pagesToRerender.add(annot.page);
-    }
-
     this.select(null);
 
     for (const annot of allAnnots) {
+      pagesToRerender.add(annot.page);
+
       if (annot.id.startsWith("img")) {
         const imageIndex = parseInt(annot.id.split("-")[1]);
-        await rpc.send({ type: "deleteImage", page: annot.page, imageIndex } as any);
+        const response = await rpc.send({ type: "deleteImage", page: annot.page, imageIndex } as any);
+        // Store the deleted content stream block for undo
+        if (this.undoManager) {
+          const undoData: any = { ...annot };
+          if ((response as any).deletedBlock) {
+            undoData._deletedBlock = (response as any).deletedBlock;
+            undoData._streamIndex = (response as any).streamIndex;
+            undoData._insertPosition = (response as any).insertPosition;
+          }
+          this.undoManager.push({
+            annotId: annot.id,
+            property: "delete",
+            previousValue: undoData,
+            newValue: null,
+          });
+        }
       } else {
+        if (this.undoManager) {
+          this.undoManager.push({
+            annotId: annot.id,
+            property: "delete",
+            previousValue: annot,
+            newValue: null,
+          });
+        }
         await rpc.send({ type: "deleteAnnot", annotId: annot.id });
       }
     }

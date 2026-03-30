@@ -12,7 +12,7 @@ import {
   handleSetAnnotInteriorColor, handleSetAnnotDefaultAppearance, handleSetAnnotIcon,
   handleSetAnnotQuadPoints, handleDeleteAnnot, handleSetWidgetValue, handleCreateAnnot,
 } from "./worker/handlers-annotations";
-import { handleAddImage, handleGetPageImages, handleExportImage, handleMoveResizeImage, handleDeleteImage, handleReorderImage } from "./worker/handlers-images";
+import { handleAddImage, handleGetPageImages, handleExportImage, handleMoveResizeImage, handleDeleteImage, handleRestoreImageBlock, handleReorderImage } from "./worker/handlers-images";
 import { handleExtractText, handleReplaceTextInStream, handleReplaceTextSmart, handleSearchText } from "./worker/handlers-text";
 
 const respond = createWorkerResponder(self);
@@ -31,7 +31,7 @@ self.onmessage = async function (e: MessageEvent) {
       case "deletePages": return handleDeletePages(request, respond, _rpcId);
       case "rearrangePages": return handleRearrangePages(request, respond, _rpcId);
       case "insertBlankPage": return handleInsertBlankPage(request, respond, _rpcId);
-      case "createBlankDocument": return handleCreateBlankDocument(respond, _rpcId);
+      case "createBlankDocument": return handleCreateBlankDocument(request, respond, _rpcId);
       case "save": return handleSave(request, respond, _rpcId);
 
       // Annotations
@@ -57,6 +57,7 @@ self.onmessage = async function (e: MessageEvent) {
       case "exportImage": return await handleExportImage(request, respond, _rpcId);
       case "moveResizeImage": return handleMoveResizeImage(request, respond, _rpcId);
       case "deleteImage": return handleDeleteImage(request, respond, _rpcId);
+      case "restoreImageBlock": return handleRestoreImageBlock(request, respond, _rpcId);
       case "reorderImage": return handleReorderImage(request, respond, _rpcId);
 
       // Text

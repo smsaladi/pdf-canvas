@@ -121,12 +121,13 @@ export type WorkerRequest =
   | { type: "addImage"; page: number; rect: [number, number, number, number]; imageData: ArrayBuffer; mimeType: string }
   | { type: "moveResizeImage"; page: number; imageIndex: number; newRect: [number, number, number, number] }
   | { type: "deleteImage"; page: number; imageIndex: number }
+  | { type: "restoreImageBlock"; page: number; block: string; streamIndex: number; insertPosition: number }
   | { type: "reorderImage"; page: number; imageIndex: number; direction: "front" | "back" | "forward" | "backward" }
   | { type: "rotatePage"; page: number; angle: number }
   | { type: "deletePages"; pages: number[] }
   | { type: "rearrangePages"; order: number[] }
   | { type: "insertBlankPage"; at: number }
-  | { type: "createBlankDocument" }
+  | { type: "createBlankDocument"; width?: number; height?: number }
   | { type: "save"; options?: string };
 
 export type WorkerResponse =

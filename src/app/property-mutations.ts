@@ -34,11 +34,19 @@ export async function applyPropertyChange(annotId: string, property: string, val
 }
 
 export async function applyUndo(entry: { annotId: string; property: string; previousValue: any; newValue: any }, value: any): Promise<void> {
-  const pageIndex = parseInt(entry.annotId.split("-")[0]);
+  const isImage = entry.annotId.startsWith("img");
+  const pageIndex = isImage
+    ? parseInt(entry.annotId.split("-")[0].replace("img", ""))
+    : parseInt(entry.annotId.split("-")[0]);
 
   switch (entry.property) {
     case "rect":
-      await rpc().send({ type: "setAnnotRect", annotId: entry.annotId, rect: value });
+      if (isImage) {
+        const imageIndex = parseInt(entry.annotId.split("-")[1]);
+        await rpc().send({ type: "moveResizeImage", page: pageIndex, imageIndex, newRect: value } as any);
+      } else {
+        await rpc().send({ type: "setAnnotRect", annotId: entry.annotId, rect: value });
+      }
       break;
     case "quadPoints":
       await rpc().send({ type: "setAnnotQuadPoints", annotId: entry.annotId, quadPoints: value });
@@ -68,14 +76,26 @@ export async function applyUndo(entry: { annotId: string; property: string; prev
       await rpc().send({ type: "setAnnotDefaultAppearance", annotId: entry.annotId, font: value.font, size: value.size, color: value.color });
       break;
     case "delete": {
-      const dto = entry.previousValue as import("../types").AnnotationDTO;
-      await rpc().send({
-        type: "createAnnot",
-        page: dto.page,
-        annotType: dto.type,
-        rect: dto.rect,
-        properties: dto,
-      });
+      if (isImage && entry.previousValue?._deletedBlock) {
+        // Restore deleted image content stream block
+        await rpc().send({
+          type: "restoreImageBlock",
+          page: pageIndex,
+          block: entry.previousValue._deletedBlock,
+          streamIndex: entry.previousValue._streamIndex ?? 0,
+          insertPosition: entry.previousValue._insertPosition ?? -1,
+        } as any);
+      } else {
+        // Undo delete = recreate annotation from saved DTO
+        const dto = entry.previousValue as import("../types").AnnotationDTO;
+        await rpc().send({
+          type: "createAnnot",
+          page: dto.page,
+          annotType: dto.type,
+          rect: dto.rect,
+          properties: dto,
+        });
+      }
       break;
     }
     case "create": {

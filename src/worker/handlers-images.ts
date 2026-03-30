@@ -366,11 +366,41 @@ export function handleDeleteImage(request: any, respond: Respond, rpcId: number 
   }
 
   const stream = streams[info.streamIndex];
+  // Store the deleted block for undo
+  const deletedBlock = stream.slice(info.blockStart, info.blockEnd);
+  const insertPosition = info.blockStart;
   streams[info.streamIndex] = stream.slice(0, info.blockStart) + stream.slice(info.blockEnd);
   writeContentStreams(contentsRef, streams);
 
   console.log(`[ImageOp] Deleted image #${request.imageIndex}`);
-  respond(rpcId, { type: "imageDeleted", page: request.page } as any);
+  respond(rpcId, {
+    type: "imageDeleted",
+    page: request.page,
+    deletedBlock,
+    streamIndex: info.streamIndex,
+    insertPosition,
+  } as any);
+}
+
+export function handleRestoreImageBlock(request: any, respond: Respond, rpcId: number | undefined) {
+  const page = getDoc().loadPage(request.page) as mupdf.PDFPage;
+  const contentsRef = page.getObject().get("Contents");
+  const streams = readContentStreams(contentsRef);
+
+  const si = request.streamIndex ?? 0;
+  if (si >= streams.length) {
+    respond(rpcId, { type: "error", message: "Stream index out of range" });
+    return;
+  }
+
+  // Insert the block back at the original position (or append if position is past end)
+  const stream = streams[si];
+  const pos = Math.min(request.insertPosition ?? stream.length, stream.length);
+  streams[si] = stream.slice(0, pos) + request.block + stream.slice(pos);
+  writeContentStreams(contentsRef, streams);
+
+  console.log(`[ImageOp] Restored image block at stream[${si}]:${pos}`);
+  respond(rpcId, { type: "imageUpdated", page: request.page } as any);
 }
 
 export function handleReorderImage(request: any, respond: Respond, rpcId: number | undefined) {
