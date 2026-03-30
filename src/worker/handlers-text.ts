@@ -455,22 +455,34 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
           new Uint8Array(subsetBuffer).set(subsetArray);
           console.log(`[FontAugment] Extracted /${fontKey} "${baseFontName}" (${subsetArray.byteLength} bytes)`);
 
-          const missingInThisFont: string[] = [];
-          try {
-            const opentype = await import("opentype.js");
-            const parsedFont = opentype.parse(subsetBuffer);
-            if (parsedFont) {
-              for (const ch of allNewTextChars) {
-                const glyph = parsedFont.charToGlyph(ch);
-                if (!glyph || glyph.index === 0 || !glyph.path?.commands?.length) {
-                  missingInThisFont.push(ch);
-                  console.log(`[FontAugment]   "${ch}" → MISSING`);
+          // Detect which characters are missing from the font
+          const isSubsetted = /^[A-Z]{6}\+/.test(baseFontName);
+          let missingInThisFont: string[];
+
+          if (isSubsetted) {
+            // Subsetted fonts have unreliable cmaps — opentype.js may report
+            // glyphs as "present" when they're actually wrong characters.
+            // Treat ALL requested chars as missing for subsetted fonts.
+            missingInThisFont = [...allNewTextChars];
+            console.log(`[FontAugment] /${fontKey}: subsetted font — treating all ${missingInThisFont.length} chars as missing`);
+          } else {
+            missingInThisFont = [];
+            try {
+              const opentype = await import("opentype.js");
+              const parsedFont = opentype.parse(subsetBuffer);
+              if (parsedFont) {
+                for (const ch of allNewTextChars) {
+                  const glyph = parsedFont.charToGlyph(ch);
+                  if (!glyph || glyph.index === 0 || !glyph.path?.commands?.length) {
+                    missingInThisFont.push(ch);
+                    console.log(`[FontAugment]   "${ch}" → MISSING`);
+                  }
                 }
               }
-            }
-          } catch { missingInThisFont.push(...allNewTextChars); }
+            } catch { missingInThisFont.push(...allNewTextChars); }
+            console.log(`[FontAugment] /${fontKey}: missing=[${missingInThisFont.join("")}]`);
+          }
 
-          console.log(`[FontAugment] /${fontKey}: missing=[${missingInThisFont.join("")}]`);
           if (missingInThisFont.length === 0 && !hasStyleOverride) continue;
 
           const parsed = parseFontName(baseFontName);
