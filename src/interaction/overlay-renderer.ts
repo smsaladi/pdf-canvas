@@ -151,6 +151,9 @@ export function renderImageOverlaysForPage(ctx: InteractionContext, pageIndex: n
       if (!ctx.canSelect()) return;
       e.stopPropagation();
       ctx.select(img.id);
+      if (!(e.target as HTMLElement).classList.contains("resize-handle")) {
+        ctx.startDrag(img.id, e, null);
+      }
     });
 
     container.appendChild(div);

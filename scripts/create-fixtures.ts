@@ -208,6 +208,38 @@ ET
   save(doc, "with-text.pdf");
 }
 
+// 8. with-image.pdf — page with an embedded image XObject
+function createWithImage() {
+  const doc = new mupdf.PDFDocument();
+
+  // Create a 4x4 red pixel image as raw RGB data
+  const width = 4, height = 4;
+  const pixels = new Uint8Array(width * height * 3);
+  for (let i = 0; i < pixels.length; i += 3) {
+    pixels[i] = 255;     // R
+    pixels[i + 1] = 0;   // G
+    pixels[i + 2] = 0;   // B
+  }
+
+  const pixmap = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0, 0, width, height], false);
+  const pxData = pixmap.getPixels();
+  pxData.set(pixels);
+  const image = new mupdf.Image(pixmap);
+  const imgRef = doc.addImage(image);
+
+  // Build page with content stream that draws the image
+  const resources = doc.newDictionary();
+  const xobjects = doc.newDictionary();
+  xobjects.put("Im0", imgRef);
+  resources.put("XObject", xobjects);
+
+  const contentStream = `q\n200 0 0 150 100 300 cm\n/Im0 Do\nQ`;
+  const pageObj = doc.addPage([0, 0, 612, 792], 0, resources, contentStream);
+  doc.insertPage(-1, pageObj);
+
+  save(doc, "with-image.pdf");
+}
+
 // Run all generators
 createBlank();
 createWithAnnotations();
@@ -215,7 +247,7 @@ createWithComments();
 createWithForm();
 createMultiPage();
 createRotated();
-
 createWithText();
+createWithImage();
 
 console.log("\nAll fixtures generated successfully!");

@@ -157,13 +157,27 @@ export class InteractionLayer implements InteractionContext {
     }
 
     this.select(null);
-    await rpc.send({ type: "deleteAnnot", annotId });
+
+    if (annotId.startsWith("img")) {
+      // Embedded page content image — delete via content stream manipulation
+      const imageIndex = parseInt(annotId.split("-")[1]);
+      await rpc.send({ type: "deleteImage", page: annot.page, imageIndex } as any);
+    } else {
+      await rpc.send({ type: "deleteAnnot", annotId });
+    }
     await this.viewport.rerenderPage(annot.page);
   }
 
   async moveAnnot(annotId: string, newRect: [number, number, number, number]): Promise<void> {
     const rpc = this.viewport.getRpc();
-    await rpc.send({ type: "setAnnotRect", annotId, rect: newRect });
+    if (annotId.startsWith("img")) {
+      // Embedded page content image — move/resize via content stream CTM
+      const page = parseInt(annotId.split("-")[0].replace("img", ""));
+      const imageIndex = parseInt(annotId.split("-")[1]);
+      await rpc.send({ type: "moveResizeImage", page, imageIndex, newRect } as any);
+    } else {
+      await rpc.send({ type: "setAnnotRect", annotId, rect: newRect });
+    }
   }
 
   async moveQuadPoints(annotId: string, newQuadPoints: number[][]): Promise<void> {

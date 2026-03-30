@@ -122,6 +122,11 @@ export class PropertiesPanel {
     let html = `<div class="props-content">`;
     html += `<h3 class="props-type">${escapeHtml(annot.type)}</h3>`;
 
+    // Export button for embedded page content images
+    if (annot.type === "Image" && annot.id.startsWith("img")) {
+      html += `<div class="props-section"><button class="props-btn" data-action="exportImage">Export Image</button></div>`;
+    }
+
     // Visual panel for drawing annotations
     const drawingTypes = new Set(["Ink", "Line", "Square", "Circle", "Highlight", "FreeText"]);
     if (drawingTypes.has(annot.type)) {
@@ -445,6 +450,13 @@ export class PropertiesPanel {
     this.container.querySelector('[data-action="delete"]')?.addEventListener("click", () => {
       if (this.annotation) {
         this.emitChange("delete", null, this.annotation);
+      }
+    });
+
+    // Export image button
+    this.container.querySelector('[data-action="exportImage"]')?.addEventListener("click", () => {
+      if (this.annotation) {
+        this.emitChange("exportImage", null, this.annotation);
       }
     });
   }

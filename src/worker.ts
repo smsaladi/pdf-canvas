@@ -12,7 +12,7 @@ import {
   handleSetAnnotInteriorColor, handleSetAnnotDefaultAppearance, handleSetAnnotIcon,
   handleSetAnnotQuadPoints, handleDeleteAnnot, handleSetWidgetValue, handleCreateAnnot,
 } from "./worker/handlers-annotations";
-import { handleAddImage, handleGetPageImages, handleExportImage } from "./worker/handlers-images";
+import { handleAddImage, handleGetPageImages, handleExportImage, handleMoveResizeImage, handleDeleteImage } from "./worker/handlers-images";
 import { handleExtractText, handleReplaceTextInStream, handleReplaceTextSmart, handleSearchText } from "./worker/handlers-text";
 
 const respond = createWorkerResponder(self);
@@ -51,6 +51,8 @@ self.onmessage = async function (e: MessageEvent) {
       case "addImage": return handleAddImage(request, respond, _rpcId);
       case "getPageImages": return handleGetPageImages(request, respond, _rpcId);
       case "exportImage": return await handleExportImage(request, respond, _rpcId);
+      case "moveResizeImage": return handleMoveResizeImage(request, respond, _rpcId);
+      case "deleteImage": return handleDeleteImage(request, respond, _rpcId);
 
       // Text
       case "extractText": return handleExtractText(request, respond, _rpcId);

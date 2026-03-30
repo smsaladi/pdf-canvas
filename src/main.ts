@@ -9,11 +9,12 @@ import { UndoManager } from "./undo";
 import { Toolbar } from "./toolbar";
 import { TextLayer } from "./text-layer";
 import { SearchBar } from "./search";
+import { ThumbnailSidebar } from "./thumbnails";
 
 import { app } from "./app/state";
 import { markDirty, markClean, findWidget, showWelcome, updatePageDisplay, isEditingText } from "./app/utils";
 import { applyPropertyChange, applyUndo } from "./app/property-mutations";
-import { openFile, openFilePicker, saveFile, insertImage, setupDragDrop } from "./app/file-ops";
+import { openFile, openFilePicker, saveFile, insertImage, setupDragDrop, createBlankCanvas } from "./app/file-ops";
 import { handleKeyDown } from "./app/keyboard";
 
 function init() {
@@ -24,6 +25,13 @@ function init() {
   const viewportEl = document.getElementById("viewport")!;
   const viewport = new Viewport(viewportEl, rpc);
   app.viewport = viewport;
+
+  // Thumbnail sidebar
+  const thumbSidebar = new ThumbnailSidebar(
+    document.getElementById("thumbnail-sidebar")!,
+    viewport,
+    rpc
+  );
 
   const undoManager = new UndoManager(50);
   app.undoManager = undoManager;
@@ -210,6 +218,29 @@ function init() {
       return;
     }
 
+    if (property === "exportImage" && annotId.startsWith("img")) {
+      const page = parseInt(annotId.split("-")[0].replace("img", ""));
+      const imageIndex = parseInt(annotId.split("-")[1]);
+      const response = await rpc.send({ type: "exportImage", page, imageIndex });
+      if (response.type === "imageExported") {
+        const canvas = document.createElement("canvas");
+        canvas.width = response.width;
+        canvas.height = response.height;
+        const ctx = canvas.getContext("2d")!;
+        ctx.drawImage(response.bitmap, 0, 0);
+        canvas.toBlob((blob) => {
+          if (!blob) return;
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `image-page${page + 1}-${imageIndex + 1}.png`;
+          a.click();
+          URL.revokeObjectURL(url);
+        }, "image/png");
+      }
+      return;
+    }
+
     if (property === "widgetValue") {
       markDirty();
       await rpc.send({ type: "setWidgetValue", widgetId: annotId, value });
@@ -230,14 +261,39 @@ function init() {
     }
   });
 
-  // Zoom display
-  const zoomDisplay = document.getElementById("zoom-display")!;
-  viewport.setZoomDisplay(zoomDisplay);
+  // Zoom input
+  const zoomInput = document.getElementById("zoom-input") as HTMLInputElement;
+  viewport.setZoomDisplay(zoomInput);
+  zoomInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const val = parseInt(zoomInput.value.replace("%", ""), 10);
+      if (!isNaN(val) && val > 0) viewport.setZoom(val / 100);
+      zoomInput.blur();
+    } else if (e.key === "Escape") {
+      zoomInput.blur();
+    }
+  });
+  zoomInput.addEventListener("focus", () => {
+    zoomInput.value = zoomInput.value.replace("%", "");
+    zoomInput.select();
+  });
+  zoomInput.addEventListener("blur", () => {
+    zoomInput.value = `${Math.round(viewport.getZoom() * 100)}%`;
+  });
 
   // File buttons
   document.getElementById("btn-open")!.addEventListener("click", openFilePicker);
   document.getElementById("btn-save")!.addEventListener("click", saveFile);
   document.getElementById("btn-insert-image")!.addEventListener("click", insertImage);
+  document.getElementById("btn-welcome-open")?.addEventListener("click", openFilePicker);
+  document.getElementById("btn-welcome-new")?.addEventListener("click", () => createBlankCanvas());
+  // Click anywhere on welcome area to open file picker
+  document.getElementById("welcome")?.addEventListener("click", (e) => {
+    // Don't trigger if clicking a button (they have their own handlers)
+    if ((e.target as HTMLElement).closest("button")) return;
+    openFilePicker();
+  });
   document.getElementById("btn-zoom-in")!.addEventListener("click", () => viewport.setZoom(viewport.getZoom() + 0.25));
   document.getElementById("btn-zoom-out")!.addEventListener("click", () => viewport.setZoom(viewport.getZoom() - 0.25));
 
@@ -302,6 +358,25 @@ function init() {
     updatePageDisplay();
   });
 
+  // Page input: type a number and press Enter to jump to that page
+  const pageInput = document.getElementById("page-input") as HTMLInputElement;
+  pageInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const val = parseInt(pageInput.value, 10);
+      const pages = viewport.getPages();
+      if (!isNaN(val) && val >= 1 && val <= pages.length) {
+        viewport.scrollToPage(val - 1);
+      }
+      pageInput.blur();
+      updatePageDisplay();
+    } else if (e.key === "Escape") {
+      pageInput.blur();
+      updatePageDisplay();
+    }
+  });
+  pageInput.addEventListener("focus", () => pageInput.select());
+
   // Scroll → page display
   document.getElementById("viewport")!.addEventListener("scroll", () => updatePageDisplay());
 
@@ -355,6 +430,45 @@ function init() {
   });
 
   showWelcome(true);
+
+  // --- JS-based toolbar tooltips (positioned to stay on-screen) ---
+  const tooltip = document.createElement("div");
+  tooltip.className = "toolbar-tooltip";
+  document.body.appendChild(tooltip);
+  let tooltipTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  const toolbarEl = document.getElementById("toolbar")!;
+  toolbarEl.addEventListener("pointerenter", (e) => {
+    const btn = (e.target as HTMLElement).closest("[title]") as HTMLElement | null;
+    if (!btn || !btn.title) return;
+    const text = btn.title;
+    // Suppress native tooltip by moving title to data attr
+    btn.dataset.tip = text;
+    btn.removeAttribute("title");
+
+    if (tooltipTimeout) clearTimeout(tooltipTimeout);
+    tooltipTimeout = setTimeout(() => {
+      tooltip.textContent = text;
+      tooltip.classList.add("visible");
+      const rect = btn.getBoundingClientRect();
+      const tipW = tooltip.offsetWidth;
+      let left = rect.left + rect.width / 2 - tipW / 2;
+      // Clamp to viewport
+      left = Math.max(4, Math.min(left, window.innerWidth - tipW - 4));
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${rect.bottom + 6}px`;
+    }, 400);
+  }, true);
+
+  toolbarEl.addEventListener("pointerleave", (e) => {
+    const btn = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
+    if (btn?.dataset.tip) {
+      btn.title = btn.dataset.tip;
+      delete btn.dataset.tip;
+    }
+    if (tooltipTimeout) { clearTimeout(tooltipTimeout); tooltipTimeout = null; }
+    tooltip.classList.remove("visible");
+  }, true);
 }
 
 // Expose for E2E testing

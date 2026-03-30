@@ -119,6 +119,8 @@ export type WorkerRequest =
   | { type: "replaceTextSmart"; page: number; oldText: string; newText: string; boldOverride?: boolean; italicOverride?: boolean; fontName?: string }
   | { type: "searchText"; needle: string; page?: number }
   | { type: "addImage"; page: number; rect: [number, number, number, number]; imageData: ArrayBuffer; mimeType: string }
+  | { type: "moveResizeImage"; page: number; imageIndex: number; newRect: [number, number, number, number] }
+  | { type: "deleteImage"; page: number; imageIndex: number }
   | { type: "rotatePage"; page: number; angle: number }
   | { type: "save"; options?: string };
 
@@ -138,4 +140,7 @@ export type WorkerResponse =
   | { type: "textReplacedSmart"; page: number; count: number; method: "content-stream" | "font-augment" | "side-by-side" | "failed" }
   | { type: "searchResults"; results: TextSearchResult[] }
   | { type: "pageRotated"; page: number; info: PageInfo }
+  | { type: "imageExported"; bitmap: ImageBitmap; width: number; height: number }
+  | { type: "imageUpdated"; page: number }
+  | { type: "imageDeleted"; page: number }
   | { type: "error"; message: string; requestType?: string };

@@ -313,6 +313,7 @@ test("moving an annotation persists through save/reload", () => {
 4. **Fixture PDFs are deterministic.** Generate them with a script, commit them. Never manually create test fixtures.
 5. **CI should run `npm test` and `npm run test:e2e`** — both must pass before any phase is considered complete.
 6. **Coverage target**: 80%+ for `src/` files (excluding `worker.ts` which is hard to unit-test but covered by integration tests).
+7. **Every bug fix MUST include a regression test.** When you encounter and fix a bug, write a test case (unit or integration) that would have caught the bug. This prevents the same bug from recurring. The test should fail without the fix and pass with it.
 
 ## License
 

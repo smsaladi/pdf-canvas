@@ -28,8 +28,10 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  // Network-first for HTML/JS (always get latest), cache-first for fonts/assets
   const url = new URL(event.request.url);
+
+  // Only handle http/https requests — skip blob:, data:, chrome-extension:, etc.
+  if (url.protocol !== "http:" && url.protocol !== "https:") return;
 
   if (url.pathname.startsWith("/fonts/") || url.hostname === "fonts.gstatic.com") {
     // Cache-first for font files (they don't change)
