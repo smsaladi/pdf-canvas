@@ -509,35 +509,41 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
             continue;
           }
 
-          // Glyph augmentation: inject missing glyphs + replace font
+          // Glyph augmentation
           const refBuffer = fetchFont(match);
           if (!refBuffer) continue;
+
+          if (isSubsetted && missingInThisFont.length > 0) {
+            // Subsetted WinAnsi font: don't modify the subsetted font at all.
+            // Instead, add a FULL reference font as a new resource and use
+            // font-switching operators to render new characters with it.
+            // This avoids all the cmap/encoding/post table issues.
+            const newFont = new mupdf.Font(baseFontName + "_full", refBuffer);
+            const editFontKey = "F_aug_" + Date.now();
+            fontDict.put(editFontKey, getDoc().addSimpleFont(newFont, "Latin"));
+            console.log(`[FontAugment] Added /${editFontKey} for missing chars in subsetted font`);
+            const doSwitch = (): boolean => {
+              const cr = pageObj.get("Contents");
+              if (cr.isArray()) { for (let i = 0; i < cr.length; i++) { const s = cr.get(i); if (!s.isStream()) continue; const { result, count } = replaceTextWithFontSwitch(s.readStream().asString(), request.oldText, request.newText, editFontKey); if (count > 0) { s.writeStream(result); return true; } } }
+              else if (cr.isStream()) { const { result, count } = replaceTextWithFontSwitch(cr.readStream().asString(), request.oldText, request.newText, editFontKey); if (count > 0) { cr.writeStream(result); return true; } }
+              return false;
+            };
+            if (doSwitch()) { respond(rpcId, { type: "textReplacedSmart", page: request.page, count: 1, method: "font-augment" }); return; }
+            continue;
+          }
+
           let fontBufferToUse: ArrayBuffer;
           if (missingInThisFont.length > 0) {
-            // For WinAnsi subsetted fonts: overwrite glyphs at existing cmap positions.
-            // The Encoding/Differences array maps byte values → glyph names → cmap indices.
-            // We must inject at EXISTING positions so the Encoding chain still works.
-            // "overwrite" mode reuses cmap slots but replaces the glyph outlines.
-            const isSubsetted = /^[A-Z]{6}\+/.test(baseFontName);
-            const augmented = augmentFont(subsetBuffer, refBuffer, missingInThisFont, isSubsetted ? "overwrite" : false);
+            const augmented = augmentFont(subsetBuffer, refBuffer, missingInThisFont, false);
             if (!augmented) continue;
             fontBufferToUse = augmented;
             console.log(`[FontAugment] Augmented ${missingInThisFont.length} glyph(s)`);
           } else {
             fontBufferToUse = refBuffer;
           }
-
-          if (/^[A-Z]{6}\+/.test(baseFontName)) {
-            // Subsetted font: write augmented bytes directly to FontFile2 stream
-            // This preserves the original Encoding/Differences dictionary
-            fontFile2.writeStream(new Uint8Array(fontBufferToUse));
-            console.log(`[FontAugment] ✓ Updated FontFile2 for /${fontKey} (${fontBufferToUse.byteLength} bytes)`);
-          } else {
-            // Non-subsetted font: replace entire font resource
-            const newFont = new mupdf.Font(baseFontName, fontBufferToUse);
-            fontDict.put(fontKey, getDoc().addSimpleFont(newFont, "Latin"));
-            console.log(`[FontAugment] ✓ Replaced /${fontKey} (${fontBufferToUse.byteLength} bytes)`);
-          }
+          const newFont = new mupdf.Font(baseFontName, fontBufferToUse);
+          fontDict.put(fontKey, getDoc().addSimpleFont(newFont, "Latin"));
+          console.log(`[FontAugment] ✓ Replaced /${fontKey} (${fontBufferToUse.byteLength} bytes)`);
           augmentedAnyFont = true;
         } catch (fontErr) { console.warn(`[FontAugment] Error on /${fontKey}:`, fontErr); }
       }
