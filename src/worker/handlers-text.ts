@@ -514,7 +514,6 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
           if (!refBuffer) continue;
           let fontBufferToUse: ArrayBuffer;
           if (missingInThisFont.length > 0) {
-            // Subsetted fonts (ABCDEF+ prefix) have unreliable cmaps — force new slots
             const isSubsetted = /^[A-Z]{6}\+/.test(baseFontName);
             const augmented = augmentFont(subsetBuffer, refBuffer, missingInThisFont, isSubsetted);
             if (!augmented) continue;
@@ -523,9 +522,18 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
           } else {
             fontBufferToUse = refBuffer;
           }
-          const newFont = new mupdf.Font(baseFontName, fontBufferToUse);
-          fontDict.put(fontKey, getDoc().addSimpleFont(newFont, "Latin"));
-          console.log(`[FontAugment] ✓ Replaced /${fontKey} (${fontBufferToUse.byteLength} bytes)`);
+
+          if (/^[A-Z]{6}\+/.test(baseFontName)) {
+            // Subsetted font: write augmented bytes directly to FontFile2 stream
+            // This preserves the original Encoding/Differences dictionary
+            fontFile2.writeStream(new Uint8Array(fontBufferToUse));
+            console.log(`[FontAugment] ✓ Updated FontFile2 for /${fontKey} (${fontBufferToUse.byteLength} bytes)`);
+          } else {
+            // Non-subsetted font: replace entire font resource
+            const newFont = new mupdf.Font(baseFontName, fontBufferToUse);
+            fontDict.put(fontKey, getDoc().addSimpleFont(newFont, "Latin"));
+            console.log(`[FontAugment] ✓ Replaced /${fontKey} (${fontBufferToUse.byteLength} bytes)`);
+          }
           augmentedAnyFont = true;
         } catch (fontErr) { console.warn(`[FontAugment] Error on /${fontKey}:`, fontErr); }
       }

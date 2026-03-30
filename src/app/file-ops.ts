@@ -15,9 +15,10 @@ export async function openFile(file: File): Promise<void> {
     updatePageDisplay();
     document.title = `${file.name} — PDF Canvas`;
     // Persist to IndexedDB for session restore on Ctrl+R
-    saveSession(buffer, file.name, 0, viewport().getZoom()).catch(() => {});
-    // Add to recent files list
-    addRecentFile(file.name, buffer).catch(() => {});
+    // Clone buffer since the original may be transferred/detached
+    const bufCopy = buffer.slice(0);
+    saveSession(bufCopy, file.name, 0, viewport().getZoom()).catch(() => {});
+    addRecentFile(file.name, bufCopy).catch(() => {});
   } catch (err: any) {
     alert(`Failed to open PDF: ${err.message}`);
     showWelcome(true);
