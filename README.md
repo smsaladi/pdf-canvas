@@ -28,14 +28,34 @@ A fully client-side, browser-based PDF editor built on [MuPDF WASM](https://mupd
 - Configure font family (sans-serif, serif, monospace), size, and text color
 - Transparent background by default
 
+### Image Editing
+- Select, move, resize, and delete embedded page content images
+- Export images as PNG
+- Insert images from file
+
+### Page Management
+- Thumbnail sidebar with page previews
+- Drag to reorder pages
+- Delete, duplicate, or insert blank pages
+- Multi-page selection (Shift+click)
+
 ### View Controls
 - Continuous scroll with lazy page rendering
-- Zoom in/out, fit-to-width, fit-to-height
+- Zoom in/out, fit-to-width, fit-to-height, pinch-to-zoom on touch
 - Rotate pages counterclockwise
-- Page navigation
+- Page navigation (click, type page number, or prev/next)
+
+### Multi-Select
+- Shift+click to add/remove annotations from selection
+- Batch move, delete, and copy selected annotations
+
+### Session Persistence
+- Auto-saves to IndexedDB every 2 seconds on changes
+- Ctrl+R / reload restores the document, page position, and zoom
+- History tab in properties panel shows undo stack and session info
 
 ### File I/O
-- Open via file picker, drag & drop
+- Open via file picker, drag & drop, or camera capture
 - Incremental save (preserves signatures on unmodified content)
 - PWA support — installable, works offline
 
@@ -85,10 +105,16 @@ All MuPDF calls happen in a Web Worker. The main thread handles DOM, user intera
 | Ctrl+F | Find & Replace |
 | Ctrl+Z | Undo |
 | Ctrl+Shift+Z | Redo |
+| Ctrl+C | Copy annotation |
+| Ctrl+V | Paste annotation |
+| Ctrl+D | Duplicate annotation |
 | Ctrl+B | Bold toggle (in text edit) |
 | Ctrl+I | Italic toggle (in text edit) |
-| Delete | Delete selected annotation |
-| Arrow keys | Nudge selected annotation 1pt |
+| Delete | Delete selected annotation(s) |
+| Arrow keys | Nudge selected annotation 1pt (Shift: 10pt) |
+| Tab | Cycle through annotations |
+| Space (hold) | Pan / drag viewport |
+| P | Hand / Pan tool |
 
 ## Development
 

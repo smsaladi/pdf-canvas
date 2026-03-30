@@ -63,4 +63,9 @@ export class UndoManager {
 
   getUndoCount(): number { return this.undoStack.length; }
   getRedoCount(): number { return this.redoStack.length; }
+
+  /** Get undo stack (newest first) for display purposes */
+  getUndoEntries(): readonly UndoEntry[] { return [...this.undoStack].reverse(); }
+  /** Get redo stack (next-to-redo first) for display purposes */
+  getRedoEntries(): readonly UndoEntry[] { return [...this.redoStack].reverse(); }
 }

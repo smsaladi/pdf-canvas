@@ -6,7 +6,7 @@ PDF Canvas is a fully client-side, browser-based PDF editor built on MuPDF WASM.
 
 ## Key Documents
 
-- `SPEC.md` — Full MVP specification, architecture, detailed design, phased roadmap, success criteria
+- `ARCHITECTURE.md` — Technical specification, architecture, detailed design, phased roadmap, success criteria
 - `RESEARCH.md` — Landscape analysis of existing open-source PDF editor projects, what they do well, what they lack, and lessons learned
 - `MUPDF_API_REFERENCE.md` — Comprehensive MuPDF JavaScript/WASM API reference for annotations, widgets, rendering, and document operations
 

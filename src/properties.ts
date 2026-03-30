@@ -1,6 +1,8 @@
-// Properties panel: displays and edits annotation properties
+// Properties panel: displays and edits annotation properties, plus History/Session tab
 
 import type { AnnotationDTO, WidgetDTO } from "./types";
+import type { UndoManager, UndoEntry } from "./undo";
+import { getSessionInfo, clearSession } from "./app/session-db";
 
 export type PropertyChangeEvent = {
   annotId: string;
@@ -19,8 +21,10 @@ export class PropertiesPanel {
   private changeListeners: PropertyChangeListener[] = [];
   private activeTool: string | null = null;
   private toolDefaults: { color: number[]; borderWidth: number; opacity: number } | null = null;
-  /** Listeners for tool default changes (color/size/opacity set before drawing) */
   private toolChangeListeners: Array<(prop: string, value: any) => void> = [];
+  private activeTab: "properties" | "history" = "properties";
+  undoManager: UndoManager | null = null;
+  private tabBar: HTMLElement | null = null;
 
   onToolDefaultChange(listener: (prop: string, value: any) => void): void {
     this.toolChangeListeners.push(listener);
@@ -29,6 +33,34 @@ export class PropertiesPanel {
   constructor(panel: HTMLElement) {
     this.panel = panel;
     this.container = panel.querySelector(".props-body") || panel;
+
+    // Insert tab bar before the body
+    const header = panel.querySelector(".props-header");
+    if (header) {
+      this.tabBar = document.createElement("div");
+      this.tabBar.className = "props-tabs";
+      this.tabBar.innerHTML = `
+        <button class="props-tab active" data-tab="properties">Properties</button>
+        <button class="props-tab" data-tab="history">History</button>
+      `;
+      header.after(this.tabBar);
+
+      this.tabBar.addEventListener("click", (e) => {
+        const btn = (e.target as HTMLElement).closest("[data-tab]") as HTMLElement | null;
+        if (!btn) return;
+        const tab = btn.dataset.tab as "properties" | "history";
+        this.activeTab = tab;
+        this.tabBar!.querySelectorAll(".props-tab").forEach(t => t.classList.remove("active"));
+        btn.classList.add("active");
+        if (tab === "history") {
+          this.panel.classList.add("open");
+          this.renderHistory();
+        } else {
+          this.render();
+        }
+      });
+    }
+
     this.render();
   }
 
@@ -287,6 +319,76 @@ export class PropertiesPanel {
     html += `</div></div>`;
 
     return html;
+  }
+
+  /** Public: refresh the history tab (called from main.ts on undo changes) */
+  refreshHistory(): void {
+    if (this.activeTab === "history") this.renderHistory();
+  }
+
+  /** Show the history tab programmatically */
+  showHistory(): void {
+    this.activeTab = "history";
+    this.panel.classList.add("open");
+    this.tabBar?.querySelectorAll(".props-tab").forEach(t => {
+      t.classList.toggle("active", (t as HTMLElement).dataset.tab === "history");
+    });
+    this.renderHistory();
+  }
+
+  private async renderHistory(): Promise<void> {
+    const um = this.undoManager;
+    let html = `<div class="history-content">`;
+
+    // Session info
+    const session = await getSessionInfo();
+    html += `<div class="session-info">`;
+    if (session) {
+      const ago = formatTimeAgo(session.timestamp);
+      html += `<div><strong>${escapeHtml(session.filename)}</strong></div>`;
+      html += `<div>Saved ${ago}</div>`;
+      html += `<div>Page ${session.currentPage + 1} &middot; Zoom ${Math.round(session.zoom * 100)}%</div>`;
+    } else {
+      html += `<div>No saved session</div>`;
+    }
+    html += `</div>`;
+
+    // Undo history
+    if (um) {
+      const undoEntries = um.getUndoEntries();
+      const redoEntries = um.getRedoEntries();
+      const total = undoEntries.length + redoEntries.length;
+      html += `<div class="history-section-header">History (${total} action${total !== 1 ? "s" : ""})</div>`;
+      html += `<div class="history-list">`;
+
+      // Undo entries (current state, top = most recent)
+      for (const entry of undoEntries) {
+        html += `<div class="history-entry current">${describeEntry(entry)}</div>`;
+      }
+      // Redo entries (undone, grayed)
+      for (const entry of redoEntries) {
+        html += `<div class="history-entry undone">${describeEntry(entry)}</div>`;
+      }
+
+      if (total === 0) {
+        html += `<div class="history-entry" style="opacity:0.4">No actions yet</div>`;
+      }
+      html += `</div>`;
+    }
+
+    // Clear session button
+    if (session) {
+      html += `<div class="history-actions"><button class="props-btn" data-action="clearSession">Clear Saved Session</button></div>`;
+    }
+
+    html += `</div>`;
+    this.container.innerHTML = html;
+
+    // Bind clear session
+    this.container.querySelector('[data-action="clearSession"]')?.addEventListener("click", async () => {
+      await clearSession();
+      this.renderHistory();
+    });
   }
 
   private renderToolPanel(): void {
@@ -551,4 +653,35 @@ function formatDate(isoString: string): string {
       year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
     });
   } catch { return isoString; }
+}
+
+function formatTimeAgo(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function describeEntry(entry: import("./undo").UndoEntry): string {
+  const id = entry.annotId;
+  const shortId = id.length > 6 ? id.slice(-4) : id;
+  switch (entry.property) {
+    case "rect": return `Move #${shortId}`;
+    case "quadPoints": return `Move highlight #${shortId}`;
+    case "color": return `Change color`;
+    case "opacity": return `Change opacity`;
+    case "contents": return `Edit text`;
+    case "borderWidth": return `Change border`;
+    case "borderStyle": return `Change border style`;
+    case "interiorColor": return `Change fill color`;
+    case "icon": return `Change icon`;
+    case "delete": return `Delete annotation`;
+    case "create": return `Create annotation`;
+    case "defaultAppearance": return `Change font`;
+    default: return `Edit ${entry.property}`;
+  }
 }

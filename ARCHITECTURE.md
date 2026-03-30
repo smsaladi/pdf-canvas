@@ -1,4 +1,19 @@
-# PDF Canvas — Product & Technical Specification
+# PDF Canvas — Architecture & Technical Specification
+
+## Current Status
+
+**All 6 phases complete.** The application is a fully functional client-side PDF editor with:
+- Annotation CRUD (12 types), form widget editing, text content editing
+- Image operations (move, resize, delete, export)
+- Font augmentation for subsetted CID/Type0 fonts
+- Multi-select, undo/redo, copy/paste
+- PWA with offline support and IndexedDB session persistence
+- Thumbnail sidebar with page management (reorder, delete, insert)
+- Touch support (pinch-zoom, mobile-friendly handles)
+
+See `README.md` for user-facing features and keyboard shortcuts.
+
+---
 
 ## Vision
 

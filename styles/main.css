@@ -641,6 +641,61 @@ body {
   align-items: center;
 }
 
+/* Tab bar for Properties/History toggle */
+.props-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.props-tab {
+  flex: 1;
+  padding: 8px 4px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-family: inherit;
+  transition: color 0.1s, border-color 0.1s;
+}
+.props-tab:hover { color: var(--text-primary); }
+.props-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* History tab content */
+.history-content { padding: 0; }
+.session-info {
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+.session-info strong { color: var(--text-primary); }
+.history-section-header {
+  padding: 8px 14px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+.history-list { padding: 2px 0; }
+.history-entry {
+  padding: 5px 14px 5px 17px;
+  font-size: 12px;
+  border-left: 3px solid transparent;
+  color: var(--text-primary);
+}
+.history-entry.current { border-left-color: var(--accent); }
+.history-entry.undone { opacity: 0.4; font-style: italic; }
+.history-actions { padding: 12px 14px; }
+
 .props-body {
   flex: 1;
   overflow-y: auto;
@@ -1129,6 +1184,64 @@ body {
   background: var(--accent);
   border-color: var(--accent);
   color: white;
+}
+
+/* Camera capture modal */
+
+.camera-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.camera-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  max-width: 90vw;
+  max-height: 90vh;
+}
+
+.camera-container video {
+  max-width: 80vw;
+  max-height: 70vh;
+  background: #000;
+  border: 2px solid var(--border);
+}
+
+.camera-controls {
+  display: flex;
+  gap: 16px;
+}
+
+.camera-btn {
+  padding: 12px 32px;
+  font-size: 16px;
+  font-weight: 500;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.camera-btn:hover {
+  background: #3a8eef;
+}
+
+.camera-btn-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.camera-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 /* --- Responsive --- */

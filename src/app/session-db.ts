@@ -100,6 +100,20 @@ export async function loadSession(): Promise<SessionData | null> {
   }
 }
 
+export async function getSessionInfo(): Promise<{ filename: string; timestamp: number; currentPage: number; zoom: number } | null> {
+  try {
+    const db = await getDB();
+    const timestamp = await get<number>(db, "timestamp");
+    if (!timestamp) return null;
+    const filename = await get<string>(db, "filename") || "unknown";
+    const currentPage = (await get<number>(db, "currentPage")) ?? 0;
+    const zoom = (await get<number>(db, "zoom")) ?? 1.0;
+    return { filename, timestamp, currentPage, zoom };
+  } catch {
+    return null;
+  }
+}
+
 export async function clearSession(): Promise<void> {
   try {
     const db = await getDB();

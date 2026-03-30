@@ -14,7 +14,7 @@ import { ThumbnailSidebar } from "./thumbnails";
 import { app } from "./app/state";
 import { markDirty, markClean, findWidget, showWelcome, updatePageDisplay, updateToolbarState, isEditingText } from "./app/utils";
 import { applyPropertyChange, applyUndo } from "./app/property-mutations";
-import { openFile, openFilePicker, saveFile, insertImage, setupDragDrop, createBlankCanvas } from "./app/file-ops";
+import { openFile, openFilePicker, saveFile, insertImage, setupDragDrop, createBlankCanvas, scanWithCamera } from "./app/file-ops";
 import { handleKeyDown } from "./app/keyboard";
 import { saveSession, loadSession, clearSession } from "./app/session-db";
 
@@ -48,6 +48,7 @@ function init() {
 
   const propsEl = document.getElementById("properties-panel")!;
   const properties = new PropertiesPanel(propsEl);
+  properties.undoManager = undoManager;
   app.properties = properties;
 
   // Wire selection → properties panel
@@ -333,6 +334,8 @@ function init() {
   });
   document.getElementById("btn-welcome-open")?.addEventListener("click", openFilePicker);
   document.getElementById("btn-welcome-new")?.addEventListener("click", () => createBlankCanvas());
+  document.getElementById("btn-welcome-scan")?.addEventListener("click", () => scanWithCamera());
+  document.getElementById("btn-scan")!.addEventListener("click", () => scanWithCamera());
   // Click anywhere on welcome area to open file picker
   document.getElementById("welcome")?.addEventListener("click", (e) => {
     // Don't trigger if clicking a button (they have their own handlers)
@@ -489,7 +492,7 @@ function init() {
       }
     }
     showWelcome(true);
-    updateToolbarState();
+    updatePageDisplay();
   });
 
   // Auto-save to IndexedDB on mutations (debounced 2s)
@@ -518,6 +521,7 @@ function init() {
     btnRedo.disabled = !undoManager.canRedo();
     markDirty();
     scheduleAutoSave();
+    properties.refreshHistory();
   });
 
   // --- JS-based toolbar tooltips (positioned to stay on-screen) ---
