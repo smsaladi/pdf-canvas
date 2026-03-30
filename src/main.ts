@@ -387,6 +387,10 @@ function init() {
     const entry = undoManager.redo();
     if (entry) await applyUndo(entry, entry.newValue);
   });
+  document.getElementById("btn-history")!.addEventListener("click", () => {
+    properties.showHistory();
+  });
+
   // Page navigation
   document.getElementById("btn-prev-page")!.addEventListener("click", () => {
     const cur = viewport.getCurrentPage();
@@ -488,7 +492,9 @@ function init() {
         console.log(`[Session] Restored "${session.filename}" from IndexedDB`);
         return;
       } catch (err) {
-        console.warn("[Session] Failed to restore:", err);
+        console.warn("[Session] Failed to restore, clearing bad session:", err);
+        clearSession();
+        showWelcome(true);
       }
     }
     showWelcome(true);

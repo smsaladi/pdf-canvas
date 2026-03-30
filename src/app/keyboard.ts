@@ -61,6 +61,13 @@ export async function handleKeyDown(e: KeyboardEvent): Promise<void> {
     return;
   }
 
+  // History: Ctrl+H
+  if ((e.ctrlKey || e.metaKey) && e.key === "h") {
+    e.preventDefault();
+    app.properties?.showHistory();
+    return;
+  }
+
   // Tool shortcuts (single key, no modifier, not while editing text)
   if (!e.ctrlKey && !e.metaKey && !e.altKey && !isEditingText()) {
     const toolKeys: Record<string, import("../toolbar").ToolMode> = {

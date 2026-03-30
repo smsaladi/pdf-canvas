@@ -60,18 +60,26 @@
           <button class="tb" id="btn-insert-image" title="Insert Image">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="10" rx="1"/><circle cx="5.5" cy="6.5" r="1.5"/><path d="M2 11l3-3 2 2 3-4 4 5"/></svg>
           </button>
+          <button class="tb" id="btn-scan" title="Scan with Camera">
+            <svg width="16" height="16" viewBox="0 -960 960 960" fill="currentColor"><path d="M80-680v-200h200v80H160v120H80Zm0 600v-200h80v120h120v80H80Zm600 0v-80h120v-120h80v200H680Zm120-600v-120H680v-80h200v200h-80ZM700-260q-25 0-42.5-17.5T640-320q0-25 17.5-42.5T700-380q25 0 42.5 17.5T760-320q0 25-17.5 42.5T700-260Zm-460 0q-25 0-42.5-17.5T180-320q0-25 17.5-42.5T240-380q25 0 42.5 17.5T300-320q0 25-17.5 42.5T240-260Zm230-180q-25 0-42.5-17.5T410-500q0-25 17.5-42.5T470-560q25 0 42.5 17.5T530-500q0 25-17.5 42.5T470-440Zm0 180q-25 0-42.5-17.5T410-320q0-25 17.5-42.5T470-380q25 0 42.5 17.5T530-320q0 25-17.5 42.5T470-260Zm0-360q-25 0-42.5-17.5T410-680q0-25 17.5-42.5T470-740q25 0 42.5 17.5T530-680q0 25-17.5 42.5T470-620Zm230 180q-25 0-42.5-17.5T640-500q0-25 17.5-42.5T700-560q25 0 42.5 17.5T760-500q0 25-17.5 42.5T700-440ZM240-440q-25 0-42.5-17.5T180-500q0-25 17.5-42.5T240-560q25 0 42.5 17.5T300-500q0 25-17.5 42.5T240-440Zm0-180q-25 0-42.5-17.5T180-680q0-25 17.5-42.5T240-740q25 0 42.5 17.5T300-680q0 25-17.5 42.5T240-620Zm460 0q-25 0-42.5-17.5T640-680q0-25 17.5-42.5T700-740q25 0 42.5 17.5T760-680q0 25-17.5 42.5T700-620Z"/></svg>
+          </button>
         </div>
 
         <span class="toolbar-sep"></span>
 
         <div class="toolbar-group" id="style-group">
           <label class="color-picker-wrap" title="Border / Stroke Color">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="12" height="12" rx="1"/></svg>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <rect x="3" y="3" width="14" height="14" stroke-width="2.5" class="border-icon-rect"/>
+              <line x1="3" y1="17" x2="17" y2="3" stroke-width="1.5" class="border-icon-slash"/>
+            </svg>
             <input type="color" id="toolbar-color" value="#ff0000" />
             <span class="color-swatch" id="color-swatch"></span>
           </label>
           <label class="color-picker-wrap" title="Fill Color">
-            <svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="1" fill="currentColor" opacity="0.5"/></svg>
+            <svg width="20" height="20" viewBox="0 0 20 20">
+              <rect x="3" y="3" width="14" height="14" stroke="var(--border)" stroke-width="1" class="fill-icon-rect"/>
+            </svg>
             <input type="color" id="toolbar-fill-color" value="#ffffff" />
             <span class="color-swatch" id="fill-swatch"></span>
           </label>
@@ -93,6 +101,9 @@
           </button>
           <button id="btn-redo" class="tb" title="Redo (Ctrl+Shift+Z)" disabled>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 6H6a3 3 0 000 6h3" stroke-linecap="round"/><path d="M10 3l3 3-3 3"/></svg>
+          </button>
+          <button id="btn-history" class="tb" title="History (Ctrl+H)">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2" stroke-linecap="round"/></svg>
           </button>
         </div>
 
@@ -121,7 +132,7 @@
           <button id="btn-prev-page" class="tb" title="Previous Page">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10 3L5 8l5 5z"/></svg>
           </button>
-          <input id="page-input" class="page-input" type="text" value="1" title="Go to page" />
+          <input id="page-input" class="page-input" type="text" value="0" title="Go to page" />
           <span class="page-total">/ <span id="page-total">0</span></span>
           <button id="btn-next-page" class="tb" title="Next Page">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5z"/></svg>
@@ -129,6 +140,9 @@
         </div>
       </div>
       <div id="main-area">
+        <button id="btn-toggle-thumbs" class="thumb-toggle-btn" title="Toggle Thumbnails">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12"/><line x1="6" y1="2" x2="6" y2="14"/></svg>
+        </button>
         <div id="thumbnail-sidebar"></div>
         <div id="search-bar"></div>
         <div id="viewport">
@@ -139,6 +153,7 @@
               <div class="welcome-actions">
                 <button id="btn-welcome-open" class="welcome-btn">Open PDF</button>
                 <button id="btn-welcome-new" class="welcome-btn welcome-btn-secondary">New Blank Canvas</button>
+                <button id="btn-welcome-scan" class="welcome-btn welcome-btn-secondary">Scan with Camera</button>
               </div>
             </div>
           </div>
@@ -153,6 +168,16 @@
         <button id="btn-toggle-props" class="props-toggle-btn" title="Toggle Properties Panel">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12"/><line x1="10" y1="2" x2="10" y2="14"/></svg>
         </button>
+      </div>
+    </div>
+    <!-- Camera capture modal -->
+    <div id="camera-modal" class="camera-modal" style="display:none">
+      <div class="camera-container">
+        <video id="camera-video" autoplay playsinline></video>
+        <div class="camera-controls">
+          <button id="camera-cancel" class="camera-btn camera-btn-secondary">Cancel</button>
+          <button id="camera-capture" class="camera-btn">Capture</button>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
