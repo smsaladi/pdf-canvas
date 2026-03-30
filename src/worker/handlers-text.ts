@@ -455,33 +455,24 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
           new Uint8Array(subsetBuffer).set(subsetArray);
           console.log(`[FontAugment] Extracted /${fontKey} "${baseFontName}" (${subsetArray.byteLength} bytes)`);
 
-          // Detect which characters are missing from the font
+          // Detect which characters are missing from the font using opentype.js.
+          // For WinAnsi/TrueType fonts (this code path), the cmap IS reliable
+          // — unlike CID/Type0 fonts where the content-map path handles it separately.
           const isSubsetted = /^[A-Z]{6}\+/.test(baseFontName);
-          let missingInThisFont: string[];
-
-          if (isSubsetted) {
-            // Subsetted fonts have unreliable cmaps — opentype.js may report
-            // glyphs as "present" when they're actually wrong characters.
-            // Treat ALL requested chars as missing for subsetted fonts.
-            missingInThisFont = [...allNewTextChars];
-            console.log(`[FontAugment] /${fontKey}: subsetted font — treating all ${missingInThisFont.length} chars as missing`);
-          } else {
-            missingInThisFont = [];
-            try {
-              const opentype = await import("opentype.js");
-              const parsedFont = opentype.parse(subsetBuffer);
-              if (parsedFont) {
-                for (const ch of allNewTextChars) {
-                  const glyph = parsedFont.charToGlyph(ch);
-                  if (!glyph || glyph.index === 0 || !glyph.path?.commands?.length) {
-                    missingInThisFont.push(ch);
-                    console.log(`[FontAugment]   "${ch}" → MISSING`);
-                  }
+          const missingInThisFont: string[] = [];
+          try {
+            const opentype = await import("opentype.js");
+            const parsedFont = opentype.parse(subsetBuffer);
+            if (parsedFont) {
+              for (const ch of allNewTextChars) {
+                const glyph = parsedFont.charToGlyph(ch);
+                if (!glyph || glyph.index === 0 || !glyph.path?.commands?.length) {
+                  missingInThisFont.push(ch);
                 }
               }
-            } catch { missingInThisFont.push(...allNewTextChars); }
-            console.log(`[FontAugment] /${fontKey}: missing=[${missingInThisFont.join("")}]`);
-          }
+            }
+          } catch { missingInThisFont.push(...allNewTextChars); }
+          console.log(`[FontAugment] /${fontKey}: missing=[${missingInThisFont.join("")}] (${missingInThisFont.length}/${allNewTextChars.length})`);
 
           if (missingInThisFont.length === 0 && !hasStyleOverride) continue;
 
