@@ -121,7 +121,12 @@ export type WorkerRequest =
   | { type: "addImage"; page: number; rect: [number, number, number, number]; imageData: ArrayBuffer; mimeType: string }
   | { type: "moveResizeImage"; page: number; imageIndex: number; newRect: [number, number, number, number] }
   | { type: "deleteImage"; page: number; imageIndex: number }
+  | { type: "reorderImage"; page: number; imageIndex: number; direction: "front" | "back" | "forward" | "backward" }
   | { type: "rotatePage"; page: number; angle: number }
+  | { type: "deletePages"; pages: number[] }
+  | { type: "rearrangePages"; order: number[] }
+  | { type: "insertBlankPage"; at: number }
+  | { type: "createBlankDocument" }
   | { type: "save"; options?: string };
 
 export type WorkerResponse =
@@ -140,6 +145,7 @@ export type WorkerResponse =
   | { type: "textReplacedSmart"; page: number; count: number; method: "content-stream" | "font-augment" | "side-by-side" | "failed" }
   | { type: "searchResults"; results: TextSearchResult[] }
   | { type: "pageRotated"; page: number; info: PageInfo }
+  | { type: "pagesUpdated"; pages: PageInfo[] }
   | { type: "imageExported"; bitmap: ImageBitmap; width: number; height: number }
   | { type: "imageUpdated"; page: number }
   | { type: "imageDeleted"; page: number }

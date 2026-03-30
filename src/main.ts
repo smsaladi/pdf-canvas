@@ -35,6 +35,7 @@ function init() {
 
   const undoManager = new UndoManager(50);
   app.undoManager = undoManager;
+  thumbSidebar.undoManager = undoManager;
 
   const textLayer = new TextLayer(viewport);
   app.textLayer = textLayer;
@@ -241,6 +242,15 @@ function init() {
       return;
     }
 
+    if (property === "reorderImage" && annotId.startsWith("img")) {
+      const page = parseInt(annotId.split("-")[0].replace("img", ""));
+      const imageIndex = parseInt(annotId.split("-")[1]);
+      await rpc.send({ type: "reorderImage", page, imageIndex, direction: value } as any);
+      markDirty();
+      await viewport.rerenderPage(page);
+      return;
+    }
+
     if (property === "widgetValue") {
       markDirty();
       await rpc.send({ type: "setWidgetValue", widgetId: annotId, value });
@@ -286,6 +296,18 @@ function init() {
   document.getElementById("btn-open")!.addEventListener("click", openFilePicker);
   document.getElementById("btn-save")!.addEventListener("click", saveFile);
   document.getElementById("btn-insert-image")!.addEventListener("click", insertImage);
+
+  // Properties panel toggle
+  const propsPanel = document.getElementById("properties-panel")!;
+  const propsToggle = document.getElementById("btn-toggle-props")!;
+  document.getElementById("btn-close-props")!.addEventListener("click", () => {
+    propsPanel.classList.add("hidden");
+    propsToggle.classList.add("visible");
+  });
+  propsToggle.addEventListener("click", () => {
+    propsPanel.classList.remove("hidden");
+    propsToggle.classList.remove("visible");
+  });
   document.getElementById("btn-welcome-open")?.addEventListener("click", openFilePicker);
   document.getElementById("btn-welcome-new")?.addEventListener("click", () => createBlankCanvas());
   // Click anywhere on welcome area to open file picker

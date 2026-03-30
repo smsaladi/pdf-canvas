@@ -39,5 +39,10 @@ export function updatePageDisplay(): void {
   const pages = viewport().getPages();
   if (pages.length === 0) return;
   const cur = viewport().getCurrentPage();
-  document.getElementById("page-display")!.textContent = `${cur + 1} / ${pages.length}`;
+  const pageInput = document.getElementById("page-input") as HTMLInputElement | null;
+  const pageTotal = document.getElementById("page-total");
+  if (pageInput && document.activeElement !== pageInput) {
+    pageInput.value = String(cur + 1);
+  }
+  if (pageTotal) pageTotal.textContent = String(pages.length);
 }

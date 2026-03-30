@@ -283,25 +283,34 @@ export function handleMoveResizeImage(request: any, respond: Respond, rpcId: num
     return;
   }
 
-  // Compute ratio between content stream space and Device trace space
-  const traceAbsA = Math.abs(tracedCtm[0]);
-  const ratio = traceAbsA > 0.01 ? Math.abs(cmA) / traceAbsA : 1;
-
   // Old overlay rect (Device trace space)
   const oldOverlayX0 = Math.min(tracedCtm[4], tracedCtm[4] + tracedCtm[0]);
   const oldOverlayY0 = Math.min(tracedCtm[5], tracedCtm[5] + tracedCtm[3]);
   const oldOverlayW = Math.abs(tracedCtm[0]);
   const oldOverlayH = Math.abs(tracedCtm[3]);
 
-  // Delta and scale in overlay space
-  const dx = x0 - oldOverlayX0;
-  const dy = y0 - oldOverlayY0;
+  // Scale factors for resize
   const scaleFactorX = oldOverlayW > 0 ? newW / oldOverlayW : 1;
   const scaleFactorY = oldOverlayH > 0 ? newH / oldOverlayH : 1;
 
-  // Convert delta to content stream space
-  const cmDx = dx * ratio;
-  const cmDy = dy * ratio;
+  // Get the page transform to convert between device space (Y down) and PDF user space (Y up)
+  // Typically [1, 0, 0, -1, 0, pageHeight] for a standard page
+  const pageCTM = (getDoc().loadPage(request.page) as any).getTransform() as number[];
+  const pa = pageCTM[0], pd = pageCTM[3];
+
+  // Delta in overlay/device space
+  const dx = x0 - oldOverlayX0;
+  const dy = y0 - oldOverlayY0;
+
+  // Convert device delta to cm E/F delta
+  // The cm E,F are in PDF user space. Device → PDF user via inverse page transform.
+  // Then PDF user → cm space needs the ratio between cm and PDF spaces.
+  // Ratio: cmA / (tracedA / pa) = cmA * pa / tracedA
+  const cmRatioX = Math.abs(tracedCtm[0]) > 0.01 ? (cmA * pa) / tracedCtm[0] : 1;
+  const cmRatioY = Math.abs(tracedCtm[3]) > 0.01 ? (cmD * pd) / tracedCtm[3] : 1;
+
+  const cmDx = dx * cmRatioX;
+  const cmDy = dy * cmRatioY;
 
   // New composed cm values
   const newCmA = cmA * scaleFactorX;
@@ -340,7 +349,7 @@ export function handleMoveResizeImage(request: any, respond: Respond, rpcId: num
   streams[info.streamIndex] = stream.slice(0, info.blockStart) + newBlockContent + stream.slice(info.blockEnd);
   writeContentStreams(contentsRef, streams);
 
-  console.log(`[ImageOp] ratio=${ratio.toFixed(2)}, delta=[${dx.toFixed(1)},${dy.toFixed(1)}] → cm_delta=[${cmDx.toFixed(1)},${cmDy.toFixed(1)}], scale=[${scaleFactorX.toFixed(3)},${scaleFactorY.toFixed(3)}]`);
+  console.log(`[ImageOp] pageCTM=[${pa},${pd}], cmRatio=[${cmRatioX.toFixed(2)},${cmRatioY.toFixed(2)}], delta=[${dx.toFixed(1)},${dy.toFixed(1)}] → cm_delta=[${cmDx.toFixed(1)},${cmDy.toFixed(1)}], scale=[${scaleFactorX.toFixed(3)},${scaleFactorY.toFixed(3)}]`);
   respond(rpcId, { type: "imageUpdated", page: request.page } as any);
 }
 
@@ -362,4 +371,67 @@ export function handleDeleteImage(request: any, respond: Respond, rpcId: number 
 
   console.log(`[ImageOp] Deleted image #${request.imageIndex}`);
   respond(rpcId, { type: "imageDeleted", page: request.page } as any);
+}
+
+export function handleReorderImage(request: any, respond: Respond, rpcId: number | undefined) {
+  const page = getDoc().loadPage(request.page) as mupdf.PDFPage;
+  const pageObj = page.getObject();
+  const contentsRef = pageObj.get("Contents");
+  const streams = readContentStreams(contentsRef);
+
+  const info = findNthImageOp(streams, request.imageIndex, pageObj);
+  if (!info) {
+    respond(rpcId, { type: "error", message: "Image not found in content stream" });
+    return;
+  }
+
+  const stream = streams[info.streamIndex];
+  const block = stream.slice(info.blockStart, info.blockEnd);
+  const withoutBlock = stream.slice(0, info.blockStart) + stream.slice(info.blockEnd);
+
+  switch (request.direction) {
+    case "front":
+      // Append at end of stream (drawn last = on top)
+      streams[info.streamIndex] = withoutBlock + "\n" + block;
+      break;
+    case "back":
+      // Insert at beginning of stream (drawn first = behind everything)
+      streams[info.streamIndex] = block + "\n" + withoutBlock;
+      break;
+    case "forward": {
+      // Find the next q...Q block after our position and insert after it
+      const afterPos = info.blockEnd;
+      const rest = stream.slice(afterPos);
+      const nextQ = rest.match(/q\s[\s\S]*?Q(?:\s|$)/);
+      if (nextQ) {
+        const insertAt = afterPos + nextQ.index! + nextQ[0].length;
+        const s = stream.slice(0, info.blockStart) + stream.slice(info.blockEnd, insertAt) + block + stream.slice(insertAt);
+        streams[info.streamIndex] = s;
+      } else {
+        // No next block — move to end
+        streams[info.streamIndex] = withoutBlock + "\n" + block;
+      }
+      break;
+    }
+    case "backward": {
+      // Find the previous q...Q block before our position and insert before it
+      const before = stream.slice(0, info.blockStart);
+      // Find the last q...Q block in the 'before' string
+      const qBlocks = [...before.matchAll(/q\s[\s\S]*?Q(?:\s|$)/g)];
+      if (qBlocks.length > 0) {
+        const lastBlock = qBlocks[qBlocks.length - 1];
+        const insertAt = lastBlock.index!;
+        const s = stream.slice(0, insertAt) + block + stream.slice(insertAt, info.blockStart) + stream.slice(info.blockEnd);
+        streams[info.streamIndex] = s;
+      } else {
+        // No previous block — move to start
+        streams[info.streamIndex] = block + "\n" + withoutBlock;
+      }
+      break;
+    }
+  }
+
+  writeContentStreams(contentsRef, streams);
+  console.log(`[ImageOp] Reordered image #${request.imageIndex} → ${request.direction}`);
+  respond(rpcId, { type: "imageUpdated", page: request.page } as any);
 }

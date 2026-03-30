@@ -10,6 +10,7 @@ export async function openFile(file: File): Promise<void> {
     await viewport().openDocument(buffer);
     app.hasOpenDocument = true;
     undoManager().clear();
+    viewport().fitToWidth();
     updatePageDisplay();
     document.title = `${file.name} — PDF Canvas`;
   } catch (err: any) {
@@ -27,6 +28,25 @@ export function openFilePicker(): void {
     if (file) openFile(file);
   };
   input.click();
+}
+
+export async function createBlankCanvas(): Promise<void> {
+  app.currentFilename = "untitled.pdf";
+  showWelcome(false);
+  try {
+    const response = await rpc().send({ type: "createBlankDocument" });
+    if (response.type === "opened") {
+      app.hasOpenDocument = true;
+      viewport().handleOpenResponse(response);
+      undoManager().clear();
+      viewport().fitToWidth();
+      updatePageDisplay();
+      document.title = "Untitled — PDF Canvas";
+    }
+  } catch (err: any) {
+    alert(`Failed to create blank canvas: ${err.message}`);
+    showWelcome(true);
+  }
 }
 
 export async function saveFile(): Promise<void> {

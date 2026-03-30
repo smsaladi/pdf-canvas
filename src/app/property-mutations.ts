@@ -93,6 +93,19 @@ export async function applyUndo(entry: { annotId: string; property: string; prev
       }
       break;
     }
+    case "rearrangePages": {
+      const resp = await rpc().send({ type: "rearrangePages", order: value });
+      if (resp.type === "pagesUpdated") {
+        viewport().setPages(resp.pages);
+      }
+      return;
+    }
+    case "deletePages": {
+      if (value instanceof ArrayBuffer) {
+        await viewport().openDocument(value);
+      }
+      return;
+    }
   }
 
   await viewport().rerenderPage(pageIndex);

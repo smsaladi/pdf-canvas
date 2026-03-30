@@ -13,7 +13,8 @@ export type ViewportEvent =
   | { type: "textExtracted"; page: number; data: PageTextData }
   | { type: "imagesLoaded"; page: number; images: PageImageDTO[] }
   | { type: "zoomChanged"; scale: number }
-  | { type: "pageLayoutChanged" };
+  | { type: "pageLayoutChanged" }
+  | { type: "pageRerendered"; page: number };
 
 type ViewportListener = (event: ViewportEvent) => void;
 
@@ -86,6 +87,15 @@ export class Viewport {
     return this.pages;
   }
 
+  /** Update pages array (after page delete/insert/reorder) and rebuild layout */
+  setPages(pages: PageInfo[]): void {
+    this.pages = pages;
+    this.renderedAtScale.clear();
+    this.annotationCache.clear();
+    this.buildPageLayout();
+    this.scheduleRender();
+  }
+
   getRpc(): WorkerRPC {
     return this.rpc;
   }
@@ -134,11 +144,15 @@ export class Viewport {
       [buffer]
     );
     if (response.type === "opened") {
-      this.pages = response.pages;
-      this.annotationCache.clear();
-      this.buildPageLayout();
-      this.scheduleRender();
+      this.handleOpenResponse(response);
     }
+  }
+
+  handleOpenResponse(response: { pages: PageInfo[] }): void {
+    this.pages = response.pages;
+    this.annotationCache.clear();
+    this.buildPageLayout();
+    this.scheduleRender();
   }
 
   setZoom(newScale: number): void {
@@ -248,6 +262,7 @@ export class Viewport {
     await this.renderPage(pageIndex);
     // Also ensure annotations are refreshed and overlays rebuilt
     await this.refreshAnnotations(pageIndex);
+    this.emit({ type: "pageRerendered", page: pageIndex });
   }
 
   private buildPageLayout(): void {
@@ -255,6 +270,7 @@ export class Viewport {
     this.pageCanvases.clear();
     this.pageContainers.clear();
 
+    const dpr = window.devicePixelRatio || 1;
     for (const page of this.pages) {
       const w = Math.round(page.width * this.scale);
       const h = Math.round(page.height * this.scale);
@@ -267,8 +283,10 @@ export class Viewport {
       wrapper.dataset.page = String(page.index);
 
       const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
       canvas.className = "page-canvas";
       wrapper.appendChild(canvas);
 
@@ -282,7 +300,13 @@ export class Viewport {
 
   private updateZoomDisplay(): void {
     if (this.zoomDisplay) {
-      this.zoomDisplay.textContent = `${Math.round(this.scale * 100)}%`;
+      if (this.zoomDisplay instanceof HTMLInputElement) {
+        if (document.activeElement !== this.zoomDisplay) {
+          this.zoomDisplay.value = `${Math.round(this.scale * 100)}%`;
+        }
+      } else {
+        this.zoomDisplay.textContent = `${Math.round(this.scale * 100)}%`;
+      }
     }
   }
 
@@ -327,11 +351,12 @@ export class Viewport {
     if (this.renderedAtScale.get(pageIndex) === this.scale) return;
 
     this.pendingRenders.add(pageIndex);
+    const dpr = window.devicePixelRatio || 1;
     try {
       const response = await this.rpc.send({
         type: "renderPage",
         page: pageIndex,
-        scale: this.scale,
+        scale: this.scale * dpr,
       });
 
       if (response.type === "pageRendered") {
@@ -340,6 +365,12 @@ export class Viewport {
           const ctx = canvas.getContext("2d")!;
           canvas.width = response.width;
           canvas.height = response.height;
+          // CSS size stays at logical pixels
+          const page = this.pages[pageIndex];
+          if (page) {
+            canvas.style.width = `${Math.round(page.width * this.scale)}px`;
+            canvas.style.height = `${Math.round(page.height * this.scale)}px`;
+          }
           ctx.drawImage(response.bitmap, 0, 0);
           response.bitmap.close();
         }

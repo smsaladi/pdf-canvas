@@ -44,6 +44,7 @@ body {
 #toolbar {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 2px;
   height: var(--toolbar-height);
   padding: 0 8px;
@@ -65,7 +66,7 @@ body {
   gap: 4px;
   padding: 4px 8px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 0;
   background: transparent;
   color: var(--text-primary);
   cursor: pointer;
@@ -97,27 +98,23 @@ body {
   border-color: transparent;
 }
 
-/* Tooltip on hover */
-#toolbar [title] {
-  position: relative;
-}
-
-#toolbar [title]:hover::after {
-  content: attr(title);
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  margin-top: 6px;
+/* Tooltip on hover — positioned via JS to avoid off-screen clipping */
+.toolbar-tooltip {
+  position: fixed;
   padding: 4px 8px;
   background: #111;
   color: #eee;
   font-size: 11px;
   white-space: nowrap;
-  border-radius: 4px;
+  border-radius: 0;
   pointer-events: none;
   z-index: 200;
   box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.toolbar-tooltip.visible {
+  opacity: 1;
 }
 
 /* Active tool state */
@@ -147,12 +144,182 @@ body {
   text-align: center;
 }
 
+.page-input {
+  width: 36px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 0;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: center;
+  font-family: inherit;
+  outline: none;
+}
+
+.page-input:focus {
+  background: rgba(0, 0, 0, 0.5);
+  outline: 1px solid var(--accent);
+}
+
+.page-total {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 2px;
+}
+
+.zoom-input {
+  width: 48px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 0;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: center;
+  font-family: inherit;
+  outline: none;
+}
+
+.zoom-input:focus {
+  background: rgba(0, 0, 0, 0.5);
+  outline: 1px solid var(--accent);
+}
+
 /* Main area: viewport + properties panel */
 
 #main-area {
   flex: 1;
   display: flex;
   overflow: hidden;
+}
+
+/* Thumbnail sidebar */
+
+#thumbnail-sidebar {
+  width: 120px;
+  flex-shrink: 0;
+  background: var(--bg-primary);
+  border-right: 1px solid var(--border);
+  display: none;
+  position: relative;
+}
+
+#thumbnail-sidebar.open {
+  display: flex;
+}
+
+.thumb-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.thumb-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.thumb-resize-handle:hover,
+.thumb-resize-handle:active {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.thumb-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 8px;
+  cursor: pointer;
+  position: relative;
+  user-select: none;
+}
+
+.thumb-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.thumb-item.active {
+  background: rgba(74, 158, 255, 0.15);
+}
+
+.thumb-item.selected .thumb-canvas {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.thumb-item.dragging {
+  opacity: 0.4;
+}
+
+.thumb-item.drag-above::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--accent);
+}
+
+.thumb-item.drag-below::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--accent);
+}
+
+.thumb-canvas {
+  border: 2px solid transparent;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  background: white;
+}
+
+.thumb-item.active .thumb-canvas {
+  border-color: var(--accent);
+}
+
+.thumb-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+/* Context menu */
+.thumb-context-menu {
+  position: fixed;
+  background: var(--bg-toolbar);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 300;
+  min-width: 160px;
+  padding: 4px 0;
+}
+
+.thumb-ctx-btn {
+  display: block;
+  width: 100%;
+  padding: 6px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.thumb-ctx-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 /* Viewport */
@@ -183,8 +350,6 @@ body {
 
 .page-canvas {
   display: block;
-  width: 100%;
-  height: 100%;
 }
 
 /* Annotation overlay container */
@@ -218,7 +383,7 @@ body {
 /* Icon-type annotations (sticky notes) */
 
 .annot-icon {
-  border-radius: 3px;
+  border-radius: 0;
   border: 1px solid rgba(0, 0, 0, 0.3);
   cursor: move;
 }
@@ -282,6 +447,7 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 10;
+  cursor: pointer;
 }
 
 .welcome-content {
@@ -299,6 +465,38 @@ body {
 .welcome-content p {
   font-size: 16px;
   line-height: 1.5;
+}
+
+.welcome-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 20px;
+}
+
+.welcome-btn {
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 500;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.welcome-btn:hover {
+  background: #3a8eef;
+}
+
+.welcome-btn-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.welcome-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 #viewport.drag-over {
@@ -331,6 +529,47 @@ body {
   overflow: hidden;
 }
 
+#properties-panel.hidden {
+  display: none !important;
+}
+
+.props-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.props-close-btn:hover {
+  color: var(--text-primary);
+}
+
+.props-toggle-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--bg-toolbar);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 6px;
+  cursor: pointer;
+  z-index: 5;
+  display: none;
+}
+
+.props-toggle-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.props-toggle-btn.visible {
+  display: block;
+}
+
 .props-header {
   padding: 10px 14px;
   font-size: 12px;
@@ -340,6 +579,9 @@ body {
   color: var(--text-secondary);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .props-body {
@@ -404,7 +646,7 @@ body {
   font-family: monospace;
   padding: 2px 4px;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 0;
   background: var(--bg-primary);
   color: var(--text-primary);
   margin-right: 6px;
@@ -414,7 +656,7 @@ body {
   width: 32px;
   height: 24px;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 0;
   cursor: pointer;
   background: none;
   padding: 0;
@@ -438,7 +680,7 @@ body {
   padding: 4px 8px;
   background: var(--bg-primary);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 13px;
 }
@@ -448,7 +690,7 @@ body {
   padding: 6px 8px;
   background: var(--bg-primary);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 13px;
   resize: vertical;
@@ -471,7 +713,7 @@ body {
   padding: 6px 12px;
   background: #c0392b;
   border: none;
-  border-radius: 4px;
+  border-radius: 0;
   color: white;
   font-size: 13px;
   cursor: pointer;
@@ -482,6 +724,38 @@ body {
   background: #e74c3c;
 }
 
+.props-btn {
+  width: 100%;
+  padding: 6px 12px;
+  background: var(--bg-toolbar);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.props-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.props-btn-sm {
+  padding: 4px 8px;
+  background: var(--bg-toolbar);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  flex: 1;
+  min-width: 50px;
+  text-align: center;
+}
+
+.props-btn-sm:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
 /* Toolbar color picker */
 
 .color-picker-wrap {
@@ -490,7 +764,7 @@ body {
   align-items: center;
   cursor: pointer;
   padding: 3px 6px;
-  border-radius: 5px;
+  border-radius: 0;
   border: 1px solid transparent;
 }
 
@@ -511,7 +785,7 @@ body {
   display: block;
   width: 16px;
   height: 16px;
-  border-radius: 3px;
+  border-radius: 0;
   border: 1px solid rgba(255, 255, 255, 0.3);
   margin-left: 4px;
 }
@@ -552,7 +826,7 @@ body {
   padding: 8px 10px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 0;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
@@ -566,7 +840,7 @@ body {
   padding: 4px 8px;
   background: var(--bg-primary);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 13px;
   width: 180px;
@@ -581,7 +855,7 @@ body {
   padding: 3px 8px;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 0;
   color: var(--text-primary);
   cursor: pointer;
   font-size: 12px;
@@ -615,7 +889,7 @@ body {
 .search-highlight {
   position: absolute;
   background: rgba(255, 230, 0, 0.4);
-  border-radius: 1px;
+  border-radius: 0;
 }
 
 .search-highlight.current {
@@ -635,7 +909,7 @@ body {
 .text-hover-highlight {
   position: absolute;
   background: rgba(74, 158, 255, 0.08);
-  border-radius: 2px;
+  border-radius: 0;
   pointer-events: none;
   z-index: 3;
   transition: all 0.05s;
@@ -645,7 +919,7 @@ body {
   position: absolute;
   background: rgba(74, 158, 255, 0.3);
   pointer-events: none;
-  border-radius: 1px;
+  border-radius: 0;
 }
 
 .text-edit-overlay {
@@ -667,7 +941,7 @@ body {
   padding: 3px 4px;
   background: var(--bg-primary);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 11px;
   cursor: pointer;
@@ -787,7 +1061,7 @@ body {
 .vp-opacity-btn {
   padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 0;
   background: transparent;
   color: var(--text-secondary);
   font-size: 11px;
@@ -828,6 +1102,7 @@ body {
   #main-area {
     flex-direction: column;
   }
+  #thumbnail-sidebar { display: none !important; }
   #properties-panel {
     width: 100% !important;
     max-height: 40vh;

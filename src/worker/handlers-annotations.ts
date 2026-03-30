@@ -40,20 +40,26 @@ export function handleSetAnnotRect(request: any, respond: Respond, rpcId: number
     const dy = request.rect[1] - annot.getBounds()[1];
     annot.setInkList(oldInk.map(stroke => stroke.map(pt => [pt[0] + dx, pt[1] + dy] as mupdf.Point)));
   } else { annot.setRect(request.rect); }
-  annot.update();
+  touchAndUpdate(annot);
   respond(rpcId, { type: "annotUpdated", annotId: request.annotId });
 }
 
+// Helper: update modification date + call update()
+function touchAndUpdate(annot: mupdf.PDFAnnotation) {
+  try { annot.setModificationDate(new Date()); } catch {}
+  annot.update();
+}
+
 // Simple property setters — each resolves the annotation, sets one property, updates, responds
-export function handleSetAnnotColor(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setColor(request.color as mupdf.AnnotColor); annot.update(); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
-export function handleSetAnnotContents(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setContents(request.text); annot.update(); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
-export function handleSetAnnotOpacity(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setOpacity(request.opacity); annot.update(); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
-export function handleSetAnnotBorderWidth(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setBorderWidth(request.width); annot.update(); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
-export function handleSetAnnotBorderStyle(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setBorderStyle(request.style as mupdf.PDFAnnotationBorderStyle); annot.update(); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
-export function handleSetAnnotInteriorColor(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setInteriorColor(request.color as mupdf.AnnotColor); annot.update(); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
-export function handleSetAnnotDefaultAppearance(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setDefaultAppearance(request.font, request.size, request.color as mupdf.AnnotColor); annot.update(); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
-export function handleSetAnnotIcon(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setIcon(request.icon); annot.update(); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
-export function handleSetAnnotQuadPoints(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setQuadPoints(request.quadPoints as mupdf.Quad[]); annot.update(); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
+export function handleSetAnnotColor(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setColor(request.color as mupdf.AnnotColor); touchAndUpdate(annot); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
+export function handleSetAnnotContents(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setContents(request.text); touchAndUpdate(annot); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
+export function handleSetAnnotOpacity(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setOpacity(request.opacity); touchAndUpdate(annot); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
+export function handleSetAnnotBorderWidth(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setBorderWidth(request.width); touchAndUpdate(annot); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
+export function handleSetAnnotBorderStyle(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setBorderStyle(request.style as mupdf.PDFAnnotationBorderStyle); touchAndUpdate(annot); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
+export function handleSetAnnotInteriorColor(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setInteriorColor(request.color as mupdf.AnnotColor); touchAndUpdate(annot); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
+export function handleSetAnnotDefaultAppearance(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setDefaultAppearance(request.font, request.size, request.color as mupdf.AnnotColor); touchAndUpdate(annot); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
+export function handleSetAnnotIcon(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setIcon(request.icon); touchAndUpdate(annot); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
+export function handleSetAnnotQuadPoints(request: any, respond: Respond, rpcId: number | undefined) { const { annot } = resolveAnnot(request.annotId); annot.setQuadPoints(request.quadPoints as mupdf.Quad[]); touchAndUpdate(annot); respond(rpcId, { type: "annotUpdated", annotId: request.annotId }); }
 
 export function handleDeleteAnnot(request: any, respond: Respond, rpcId: number | undefined) {
   const { page, annot } = resolveAnnot(request.annotId);
@@ -92,6 +98,11 @@ export function handleCreateAnnot(request: any, respond: Respond, rpcId: number 
     if (props.line) { try { annot.setLine(props.line[0] as mupdf.Point, props.line[1] as mupdf.Point); } catch {} }
     if (props.author) annot.setAuthor(props.author);
   }
+  // Set creation/modification dates
+  const now = new Date();
+  try { annot.setCreationDate(now); } catch {}
+  try { annot.setModificationDate(now); } catch {}
+
   annot.update();
   const created = getAnnotations(request.page).at(-1)!;
   respond(rpcId, { type: "annotCreated", annot: created });

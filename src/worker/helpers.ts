@@ -71,8 +71,14 @@ export function getAnnotations(pageIndex: number): AnnotationDTO[] {
       if (a.hasLine()) dto.line = a.getLine() as unknown as number[][];
       if (a.hasInkList()) dto.inkList = a.getInkList() as unknown as number[][][];
 
-      try { dto.modifiedDate = a.getModificationDate()?.toISOString(); } catch {}
-      try { dto.createdDate = a.getCreationDate()?.toISOString(); } catch {}
+      try {
+        const md = a.getModificationDate();
+        if (md && md.valueOf() > 0) dto.modifiedDate = md.toISOString();
+      } catch {}
+      try {
+        const cd = a.getCreationDate();
+        if (cd && cd.valueOf() > 0) dto.createdDate = cd.toISOString();
+      } catch {}
 
       if (a.getType() === "FreeText") {
         try {

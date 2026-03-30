@@ -35,6 +35,43 @@ export function handleRotatePage(request: any, respond: Respond, rpcId: number |
   respond(rpcId, { type: "pageRotated", page: request.page, info: getPageInfo(request.page) } as any);
 }
 
+function getAllPageInfos(): PageInfo[] {
+  const doc = getDoc();
+  const pages: PageInfo[] = [];
+  for (let i = 0; i < doc.countPages(); i++) pages.push(getPageInfo(i));
+  return pages;
+}
+
+export function handleDeletePages(request: any, respond: Respond, rpcId: number | undefined) {
+  const doc = getDoc();
+  // Delete in reverse order so indices stay valid
+  const sorted = [...request.pages].sort((a: number, b: number) => b - a);
+  for (const idx of sorted) {
+    if (idx >= 0 && idx < doc.countPages()) doc.deletePage(idx);
+  }
+  respond(rpcId, { type: "pagesUpdated", pages: getAllPageInfos() });
+}
+
+export function handleRearrangePages(request: any, respond: Respond, rpcId: number | undefined) {
+  getDoc().rearrangePages(request.order);
+  respond(rpcId, { type: "pagesUpdated", pages: getAllPageInfos() });
+}
+
+export function handleInsertBlankPage(request: any, respond: Respond, rpcId: number | undefined) {
+  const doc = getDoc();
+  const pageObj = doc.addPage([0, 0, 612, 792], 0, null as any, "");
+  doc.insertPage(request.at, pageObj);
+  respond(rpcId, { type: "pagesUpdated", pages: getAllPageInfos() });
+}
+
+export function handleCreateBlankDocument(respond: Respond, rpcId: number | undefined) {
+  const doc = new mupdf.PDFDocument();
+  const pageObj = doc.addPage([0, 0, 612, 792], 0, null as any, "");
+  doc.insertPage(0, pageObj);
+  setDoc(doc);
+  respond(rpcId, { type: "opened", pageCount: 1, pages: [getPageInfo(0)] });
+}
+
 export function handleSave(request: any, respond: Respond, rpcId: number | undefined) {
   try { getDoc().subsetFonts(); } catch {}
   const buf = getDoc().saveToBuffer(request.options || "incremental");

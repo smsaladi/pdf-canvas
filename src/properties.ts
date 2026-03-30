@@ -122,9 +122,16 @@ export class PropertiesPanel {
     let html = `<div class="props-content">`;
     html += `<h3 class="props-type">${escapeHtml(annot.type)}</h3>`;
 
-    // Export button for embedded page content images
+    // Image-specific controls
     if (annot.type === "Image" && annot.id.startsWith("img")) {
       html += `<div class="props-section"><button class="props-btn" data-action="exportImage">Export Image</button></div>`;
+      html += `<div class="props-section"><label class="props-label">Layer Order</label>`;
+      html += `<div class="props-row" style="gap:4px;flex-wrap:wrap">`;
+      html += `<button class="props-btn-sm" data-action="zBack" title="Send to Back">Back</button>`;
+      html += `<button class="props-btn-sm" data-action="zBackward" title="Send Backward">Backward</button>`;
+      html += `<button class="props-btn-sm" data-action="zForward" title="Bring Forward">Forward</button>`;
+      html += `<button class="props-btn-sm" data-action="zFront" title="Bring to Front">Front</button>`;
+      html += `</div></div>`;
     }
 
     // Visual panel for drawing annotations
@@ -459,6 +466,15 @@ export class PropertiesPanel {
         this.emitChange("exportImage", null, this.annotation);
       }
     });
+
+    // Z-order buttons
+    for (const dir of ["zFront", "zBack", "zForward", "zBackward"]) {
+      this.container.querySelector(`[data-action="${dir}"]`)?.addEventListener("click", () => {
+        if (this.annotation) {
+          this.emitChange("reorderImage", dir.replace("z", "").toLowerCase(), this.annotation);
+        }
+      });
+    }
   }
 
   private renderWidget(): void {
