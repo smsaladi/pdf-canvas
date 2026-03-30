@@ -49,6 +49,15 @@ function init() {
   const propsEl = document.getElementById("properties-panel")!;
   const properties = new PropertiesPanel(propsEl);
   properties.undoManager = undoManager;
+  properties.onHistoryJump = async (direction, steps) => {
+    for (let i = 0; i < steps; i++) {
+      const entry = direction === "undo" ? undoManager.undo() : undoManager.redo();
+      if (entry) {
+        const value = direction === "undo" ? entry.previousValue : entry.newValue;
+        await applyUndo(entry, value);
+      }
+    }
+  };
   app.properties = properties;
 
   // Wire selection → properties panel
@@ -477,11 +486,12 @@ function init() {
 
   // Try to restore session from IndexedDB (persists across Ctrl+R)
   loadSession().then(async (session) => {
-    if (session) {
+    if (session && session.pdfBuffer && session.pdfBuffer.byteLength > 0) {
       try {
         app.currentFilename = session.filename;
-        showWelcome(false);
         await viewport.openDocument(session.pdfBuffer);
+        // Only hide welcome AFTER successful open
+        showWelcome(false);
         app.hasOpenDocument = true;
         undoManager.clear();
         if (session.zoom) viewport.setZoom(session.zoom);
@@ -494,7 +504,6 @@ function init() {
       } catch (err) {
         console.warn("[Session] Failed to restore, clearing bad session:", err);
         clearSession();
-        showWelcome(true);
       }
     }
     showWelcome(true);

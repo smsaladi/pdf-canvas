@@ -25,6 +25,8 @@ export class PropertiesPanel {
   private activeTab: "properties" | "history" = "properties";
   undoManager: UndoManager | null = null;
   private tabBar: HTMLElement | null = null;
+  /** Callback for jumping to a specific undo/redo position */
+  onHistoryJump: ((direction: "undo" | "redo", steps: number) => Promise<void>) | null = null;
 
   onToolDefaultChange(listener: (prop: string, value: any) => void): void {
     this.toolChangeListeners.push(listener);
@@ -362,12 +364,15 @@ export class PropertiesPanel {
       html += `<div class="history-list">`;
 
       // Undo entries (current state, top = most recent)
-      for (const entry of undoEntries) {
-        html += `<div class="history-entry current">${describeEntry(entry)}</div>`;
+      // Clicking undoes back to that point (1 = most recent, 2 = two back, etc.)
+      for (let i = 0; i < undoEntries.length; i++) {
+        const steps = i + 1; // how many undos to reach this state
+        html += `<div class="history-entry current" data-action="undo" data-steps="${steps}" title="Click to undo to this point">${describeEntry(undoEntries[i])}</div>`;
       }
-      // Redo entries (undone, grayed)
-      for (const entry of redoEntries) {
-        html += `<div class="history-entry undone">${describeEntry(entry)}</div>`;
+      // Redo entries (undone, grayed) — clicking redoes forward
+      for (let i = 0; i < redoEntries.length; i++) {
+        const steps = i + 1;
+        html += `<div class="history-entry undone" data-action="redo" data-steps="${steps}" title="Click to redo to this point">${describeEntry(redoEntries[i])}</div>`;
       }
 
       if (total === 0) {
@@ -389,6 +394,18 @@ export class PropertiesPanel {
       await clearSession();
       this.renderHistory();
     });
+
+    // Bind history entry clicks (undo/redo to specific point)
+    for (const el of this.container.querySelectorAll<HTMLElement>("[data-action=undo], [data-action=redo]")) {
+      el.style.cursor = "pointer";
+      el.addEventListener("click", async () => {
+        const direction = el.dataset.action as "undo" | "redo";
+        const steps = parseInt(el.dataset.steps || "1");
+        if (this.onHistoryJump) {
+          await this.onHistoryJump(direction, steps);
+        }
+      });
+    }
   }
 
   private renderToolPanel(): void {

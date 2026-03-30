@@ -694,6 +694,7 @@ body {
 }
 .history-entry.current { border-left-color: var(--accent); }
 .history-entry.undone { opacity: 0.4; font-style: italic; }
+.history-entry[data-action]:hover { background: var(--bg-hover, rgba(0,0,0,0.05)); cursor: pointer; }
 .history-actions { padding: 12px 14px; }
 
 .props-body {
