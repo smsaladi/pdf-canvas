@@ -314,6 +314,8 @@ test("moving an annotation persists through save/reload", () => {
 5. **CI should run `npm test` and `npm run test:e2e`** — both must pass before any phase is considered complete.
 6. **Coverage target**: 80%+ for `src/` files (excluding `worker.ts` which is hard to unit-test but covered by integration tests).
 7. **Every bug fix MUST include a regression test.** When you encounter and fix a bug, write a test case (unit or integration) that would have caught the bug. This prevents the same bug from recurring. The test should fail without the fix and pass with it.
+8. **User-reported bugs → fix + test in the same commit.** When the user reports a bug (including edge cases with specific PDFs), the workflow is: (a) diagnose the root cause, (b) create a minimal test fixture in `scripts/create-fixtures.ts` that reproduces the encoding/structure pattern (NOT the user's actual PDF), (c) write a test that fails without the fix, (d) implement the fix, (e) verify the test passes, (f) commit fix + test together. The test fixture should capture the *structural pattern* (e.g., Type0/Identity-H encoding, negative CTM values, multiple cm operators) rather than the specific document content.
+9. **Test fixtures cover encoding diversity.** Maintain fixtures for each PDF encoding family encountered: WinAnsi/MacRoman (literal strings), Type0/Identity-H (hex glyph IDs), TJ arrays with kerning, multi-font content streams, and negative-CTM image placement. When a new encoding pattern causes a bug, add a fixture for that pattern.
 
 ## License
 

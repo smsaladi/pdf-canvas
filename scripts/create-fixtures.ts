@@ -240,6 +240,202 @@ function createWithImage() {
   save(doc, "with-image.pdf");
 }
 
+// 9. with-type0-text.pdf — page with WinAnsi text via addSimpleFont (TrueType),
+//    plus a manually constructed Type0/Identity-H font with hex glyph IDs and ToUnicode CMap.
+//    This tests the two major encoding families found in real-world PDFs.
+function createWithType0Text() {
+  const doc = new mupdf.PDFDocument();
+
+  // --- Font F1: Standard WinAnsi TrueType via addSimpleFont ---
+  const winAnsiFont = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+
+  // --- Font F2: Type0/Identity-H font built from raw PDF objects ---
+  // We create a minimal Type0 font that maps glyph IDs to Unicode via a ToUnicode CMap.
+  // The text "Hello World" will be encoded as hex glyph IDs.
+
+  // Define the glyph ID mapping: we use simple 1:1 mapping where GID = Unicode codepoint
+  const testText = "Hello World";
+  const chars = [...new Set(testText)];
+  const gidMap: Record<string, number> = {};
+  for (const ch of chars) {
+    gidMap[ch] = ch.charCodeAt(0);
+  }
+
+  // Build ToUnicode CMap
+  const bfcharEntries = chars
+    .map(ch => `<${ch.charCodeAt(0).toString(16).padStart(4, "0")}> <${ch.charCodeAt(0).toString(16).padStart(4, "0")}>`)
+    .join("\n");
+
+  const cmapStream = `/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def
+/CMapType 2 def
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+${chars.length} beginbfchar
+${bfcharEntries}
+endbfchar
+endcmap
+CMapSpelling CMapName /CMap defineresource pop
+end
+end`;
+
+  // Create the ToUnicode stream object
+  const toUnicodeObj = doc.newDictionary();
+  const toUnicodeRef = doc.addStream(cmapStream, toUnicodeObj);
+
+  // Use the same base font (Helvetica) but wrap it as Type0
+  const baseFont = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+
+  // Create CIDFont descriptor (Type2 = TrueType-based CID font)
+  const cidFontDict = doc.newDictionary();
+  cidFontDict.put("Type", doc.newName("Font"));
+  cidFontDict.put("Subtype", doc.newName("CIDFontType2"));
+  cidFontDict.put("BaseFont", doc.newName("Helvetica-Identity"));
+
+  const cidSystemInfo = doc.newDictionary();
+  cidSystemInfo.put("Registry", doc.newString("Adobe"));
+  cidSystemInfo.put("Ordering", doc.newString("Identity"));
+  cidSystemInfo.put("Supplement", doc.newInteger(0));
+  cidFontDict.put("CIDSystemInfo", cidSystemInfo);
+
+  // Build the Type0 font dictionary
+  const type0Font = doc.newDictionary();
+  type0Font.put("Type", doc.newName("Font"));
+  type0Font.put("Subtype", doc.newName("Type0"));
+  type0Font.put("BaseFont", doc.newName("Helvetica-Identity"));
+  type0Font.put("Encoding", doc.newName("Identity-H"));
+
+  const descendantFonts = doc.newArray();
+  const cidFontRef = doc.addObject(cidFontDict);
+  descendantFonts.push(cidFontRef);
+  type0Font.put("DescendantFonts", descendantFonts);
+  type0Font.put("ToUnicode", toUnicodeRef);
+
+  const type0FontRef = doc.addObject(type0Font);
+
+  // Build resources with both fonts
+  const resources = doc.newDictionary();
+  const fonts = doc.newDictionary();
+  fonts.put("F1", winAnsiFont);
+  fonts.put("F2", type0FontRef);
+  resources.put("Font", fonts);
+
+  // Build hex-encoded text for "Hello World" using glyph IDs
+  const hexChars = [...testText].map(ch => {
+    const gid = gidMap[ch];
+    return `<${gid.toString(16).padStart(4, "0")}> Tj`;
+  });
+
+  // Content stream with both encoding styles
+  const contentStream = `
+BT
+/F1 18 Tf
+72 700 Td
+(WinAnsi encoded text: Hello World) Tj
+0 -30 Td
+(This uses standard literal string encoding) Tj
+ET
+BT
+/F2 18 Tf
+72 620 Td
+${hexChars.join("\n")}
+ET
+`;
+
+  const pageObj = doc.addPage([0, 0, 612, 792], 0, resources, contentStream);
+  doc.insertPage(-1, pageObj);
+  save(doc, "with-type0-text.pdf");
+}
+
+// 10. with-multiline-text.pdf — page with repeated text on multiple lines at different Y positions
+function createWithMultilineText() {
+  const doc = new mupdf.PDFDocument();
+
+  const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+  const resources = doc.newDictionary();
+  const fonts = doc.newDictionary();
+  fonts.put("F1", font);
+  resources.put("Font", fonts);
+
+  // Multiple lines with some text appearing on more than one line
+  const contentStream = `
+BT
+/F1 14 Tf
+72 720 Td
+(Line 1: The quick brown fox jumps over the lazy dog) Tj
+0 -24 Td
+(Line 2: A different sentence with unique words) Tj
+0 -24 Td
+(Line 3: The quick brown fox jumps over the lazy dog) Tj
+0 -24 Td
+(Line 4: Yet another line of text for testing) Tj
+0 -24 Td
+(Line 5: The quick brown fox jumps over the lazy dog) Tj
+0 -24 Td
+(Line 6: Final line with distinct content here) Tj
+ET
+`;
+
+  const pageObj = doc.addPage([0, 0, 612, 792], 0, resources, contentStream);
+  doc.insertPage(-1, pageObj);
+  save(doc, "with-multiline-text.pdf");
+}
+
+// 11. with-styled-text.pdf — page with bold, italic, and regular text using different font resources
+function createWithStyledText() {
+  const doc = new mupdf.PDFDocument();
+
+  // Create three font resources: regular, bold, italic
+  const regularFont = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+  const boldFont = doc.addSimpleFont(new mupdf.Font("Helvetica-Bold"));
+  const italicFont = doc.addSimpleFont(new mupdf.Font("Helvetica-Oblique"));
+
+  const resources = doc.newDictionary();
+  const fonts = doc.newDictionary();
+  fonts.put("F1", regularFont);
+  fonts.put("F2", boldFont);
+  fonts.put("F3", italicFont);
+  resources.put("Font", fonts);
+
+  // Content stream switching between fonts
+  const contentStream = `
+BT
+/F1 16 Tf
+72 700 Td
+(Regular text introduction) Tj
+0 -28 Td
+/F2 16 Tf
+(Bold heading text) Tj
+0 -28 Td
+/F3 16 Tf
+(Italic emphasis text) Tj
+0 -28 Td
+/F1 12 Tf
+(Back to regular smaller text for body content) Tj
+0 -20 Td
+/F2 12 Tf
+(Bold label:) Tj
+( ) Tj
+/F1 12 Tf
+(followed by regular value) Tj
+0 -20 Td
+/F3 12 Tf
+(Italic note:) Tj
+( ) Tj
+/F1 12 Tf
+(with regular continuation) Tj
+ET
+`;
+
+  const pageObj = doc.addPage([0, 0, 612, 792], 0, resources, contentStream);
+  doc.insertPage(-1, pageObj);
+  save(doc, "with-styled-text.pdf");
+}
+
 // Run all generators
 createBlank();
 createWithAnnotations();
@@ -249,5 +445,8 @@ createMultiPage();
 createRotated();
 createWithText();
 createWithImage();
+createWithType0Text();
+createWithMultilineText();
+createWithStyledText();
 
 console.log("\nAll fixtures generated successfully!");

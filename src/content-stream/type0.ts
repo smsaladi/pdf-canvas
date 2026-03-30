@@ -9,7 +9,7 @@ export function parseToUnicodeCMap(cmapData: string): { gidToUnicode: Map<number
 
   const bfcharSections = cmapData.match(/beginbfchar\s*([\s\S]*?)endbfchar/g) || [];
   for (const section of bfcharSections) {
-    for (const [, gidHex, uniHex] of section.matchAll(/<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>/g)) {
+    for (const [, gidHex, uniHex] of section.matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g)) {
       const gid = parseInt(gidHex, 16);
       const ch = String.fromCharCode(parseInt(uniHex, 16));
       gidToUnicode.set(gid, ch);
@@ -19,7 +19,7 @@ export function parseToUnicodeCMap(cmapData: string): { gidToUnicode: Map<number
 
   const bfrangeSections = cmapData.match(/beginbfrange\s*([\s\S]*?)endbfrange/g) || [];
   for (const section of bfrangeSections) {
-    for (const [, startHex, endHex, uniStartHex] of section.matchAll(/<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>/g)) {
+    for (const [, startHex, endHex, uniStartHex] of section.matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g)) {
       const startGid = parseInt(startHex, 16);
       const endGid = parseInt(endHex, 16);
       let uniCode = parseInt(uniStartHex, 16);

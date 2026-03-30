@@ -91,21 +91,26 @@ export function buildGlyphMap(page: mupdf.PDFPage): GlyphMapping[] {
   for (const si of streams) {
     const { data, streamIndex } = si;
 
-    // Find hex string Tj operators: <XXXX> Tj (Type0 fonts)
-    const hexPattern = /<([0-9A-Fa-f]{4})>\s*Tj/g;
+    // Find hex string Tj operators: <XXXX> Tj or <XXXXXXXX> Tj (Type0 fonts)
+    // Multi-glyph hex strings contain multiple 4-hex-char CID glyph IDs
+    const hexPattern = /<([0-9A-Fa-f]+)>\s*Tj/g;
     let hm;
     while ((hm = hexPattern.exec(data)) !== null) {
-      streamGlyphs.push({
-        glyphId: parseInt(hm[1], 16),
-        streamIndex,
-        hexStart: hm.index + 1,  // start of hex digits (after <)
-        hexEnd: hm.index + 5,    // end of hex digits (before >)
-        isHex: true,
-      });
+      const hexStr = hm[1];
+      const baseOffset = hm.index + 1; // after <
+      // Each glyph is 4 hex chars (2 bytes) for CID fonts
+      for (let ci = 0; ci + 3 < hexStr.length; ci += 4) {
+        streamGlyphs.push({
+          glyphId: parseInt(hexStr.slice(ci, ci + 4), 16),
+          streamIndex,
+          hexStart: baseOffset + ci,
+          hexEnd: baseOffset + ci + 4,
+          isHex: true,
+        });
+      }
     }
 
     // Find literal string Tj operators: (text) Tj (WinAnsi fonts)
-    // Each character in a literal string is a separate glyph
     const litPattern = /\(([^)]*)\)\s*Tj/g;
     let lm;
     while ((lm = litPattern.exec(data)) !== null) {
@@ -122,14 +127,14 @@ export function buildGlyphMap(page: mupdf.PDFPage): GlyphMapping[] {
       }
     }
 
-    // Find TJ array operators: [(text) kern (text)] TJ (WinAnsi with kerning)
+    // Find TJ array operators: [(text) kern (text)] TJ or [<hex> kern <hex>] TJ
     const tjArrayPattern = /\[((?:[^[\]]*?))\]\s*TJ/g;
     let tam;
     while ((tam = tjArrayPattern.exec(data)) !== null) {
       const arrayContent = tam[1];
       const arrayStart = tam.index + 1;
 
-      // Extract strings from within the array
+      // Extract literal strings from within the array
       const innerLitPattern = /\(([^)]*)\)/g;
       let ilm;
       while ((ilm = innerLitPattern.exec(arrayContent)) !== null) {
@@ -142,6 +147,23 @@ export function buildGlyphMap(page: mupdf.PDFPage): GlyphMapping[] {
             hexStart: innerStart + ci,
             hexEnd: innerStart + ci + 1,
             isHex: false,
+          });
+        }
+      }
+
+      // Extract hex strings from within the array (Type0/CID fonts in TJ arrays)
+      const innerHexPattern = /<([0-9A-Fa-f]+)>/g;
+      let ihm;
+      while ((ihm = innerHexPattern.exec(arrayContent)) !== null) {
+        const hexStr = ihm[1];
+        const baseOffset = arrayStart + ihm.index + 1;
+        for (let ci = 0; ci + 3 < hexStr.length; ci += 4) {
+          streamGlyphs.push({
+            glyphId: parseInt(hexStr.slice(ci, ci + 4), 16),
+            streamIndex,
+            hexStart: baseOffset + ci,
+            hexEnd: baseOffset + ci + 4,
+            isHex: true,
           });
         }
       }

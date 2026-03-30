@@ -402,6 +402,31 @@ endcmap`;
     // bfrange 3: 0x0046-0x004C = 7 entries
     expect(gidToUnicode.size).toBe(2 + 2 + 14 + 7);
   });
+
+  // Regression: CMap entries without whitespace between > and < (e.g. iText-generated PDFs)
+  it("parses bfrange entries with no whitespace between hex tokens", () => {
+    const noSpaceCMap = `beginbfrange
+<0003><0003><0020>
+<0024><002c><0041>
+<0044><005d><0061>
+endbfrange`;
+    const { gidToUnicode } = parseToUnicodeCMap(noSpaceCMap);
+    expect(gidToUnicode.get(0x0003)).toBe(" ");  // space
+    expect(gidToUnicode.get(0x0024)).toBe("A");
+    expect(gidToUnicode.get(0x002c)).toBe("I");
+    expect(gidToUnicode.get(0x0044)).toBe("a");
+    expect(gidToUnicode.get(0x005d)).toBe("z");
+  });
+
+  it("parses bfchar entries with no whitespace between hex tokens", () => {
+    const noSpaceCMap = `beginbfchar
+<0003><0020>
+<0010><002D>
+endbfchar`;
+    const { gidToUnicode } = parseToUnicodeCMap(noSpaceCMap);
+    expect(gidToUnicode.get(0x0003)).toBe(" ");
+    expect(gidToUnicode.get(0x0010)).toBe("-");
+  });
 });
 
 describe("getAllText (complex streams)", () => {
