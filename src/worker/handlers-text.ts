@@ -51,7 +51,11 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
   const selY = (request as any).selectionY;
   const selX = 0; // X not critical for disambiguation
 
-  if (selY !== undefined) {
+  const hasStyleOverride = request.boldOverride !== undefined || request.italicOverride !== undefined;
+
+  if (selY !== undefined && !hasStyleOverride) {
+    // Content-map path: direct glyph editing (no font switching).
+    // Skip this path when bold/italic toggle is requested — that needs the font-switch path.
     try {
       console.log(`[ContentMap] Building glyph map for page ${request.page}...`);
       const glyphMap = buildGlyphMap(page);
@@ -424,7 +428,6 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
 
   const allNewTextChars: string[] = [...new Set(request.newText as string)].filter(c => c.trim());
   let augmentedAnyFont = false;
-  const hasStyleOverride = request.boldOverride !== undefined || request.italicOverride !== undefined;
   console.log(`[FontAugment] Checking ${allNewTextChars.length} unique chars: "${allNewTextChars.join("")}"${hasStyleOverride ? " [style override]" : ""}`);
 
   try {
