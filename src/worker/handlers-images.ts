@@ -417,45 +417,86 @@ export function handleReorderImage(request: any, respond: Respond, rpcId: number
 
   const stream = streams[info.streamIndex];
   const block = stream.slice(info.blockStart, info.blockEnd);
+
+  // Find ALL image Do operations to determine relative ordering
+  const allImageOps: Array<{ blockStart: number; blockEnd: number }> = [];
+  const imageNames = new Set<string>();
+  const resources = pageObj.get("Resources");
+  if (!resources.isNull()) {
+    const xobjects = resources.get("XObject");
+    if (xobjects && !xobjects.isNull()) {
+      const keys: string[] = [];
+      xobjects.forEach((_: any, k: string | number) => keys.push(String(k)));
+      for (const key of keys) {
+        const xobj = xobjects.get(key);
+        if (xobj.get("Subtype")?.asName() === "Image") imageNames.add(key);
+      }
+    }
+  }
+
+  // Find all image q...Q blocks in order
+  const doPattern = /\/([\w.+]+)\s+Do\b/g;
+  let doMatch;
+  while ((doMatch = doPattern.exec(stream)) !== null) {
+    if (imageNames.size > 0 && !imageNames.has(doMatch[1])) continue;
+    // Scan backward for enclosing q
+    let bs = doMatch.index;
+    for (let i = doMatch.index - 1; i >= 0; i--) {
+      if (stream[i] === 'q' && (i === 0 || /\s/.test(stream[i - 1]))) { bs = i; break; }
+      if (!/\s/.test(stream[i]) && !/[-\d.ecm]/.test(stream[i])) break;
+    }
+    // Scan forward for Q
+    let be = doMatch.index + doMatch[0].length;
+    const after = stream.slice(be);
+    const qm = after.match(/^\s*Q(?:\s|$)/);
+    if (qm) be += qm[0].length;
+    allImageOps.push({ blockStart: bs, blockEnd: be });
+  }
+
+  // Find our image's index in the sorted list
+  const myIdx = allImageOps.findIndex(op => op.blockStart === info.blockStart);
   const withoutBlock = stream.slice(0, info.blockStart) + stream.slice(info.blockEnd);
 
   switch (request.direction) {
     case "front":
-      // Append at end of stream (drawn last = on top)
+      // Move to end of stream (drawn last = on top)
       streams[info.streamIndex] = withoutBlock + "\n" + block;
       break;
     case "back":
-      // Insert at beginning of stream (drawn first = behind everything)
-      streams[info.streamIndex] = block + "\n" + withoutBlock;
+      // Move to just before the first image block (preserves pre-image setup)
+      if (allImageOps.length > 0 && allImageOps[0].blockStart !== info.blockStart) {
+        const firstStart = allImageOps[0].blockStart;
+        const s = stream.slice(0, firstStart) + block + "\n" + stream.slice(firstStart, info.blockStart) + stream.slice(info.blockEnd);
+        streams[info.streamIndex] = s;
+      } else if (allImageOps.length > 1) {
+        // We're already first — move before the second image's original position
+        streams[info.streamIndex] = withoutBlock; // already at front, nothing to do
+      } else {
+        streams[info.streamIndex] = withoutBlock; // only one image
+      }
       break;
     case "forward": {
-      // Find the next q...Q block after our position and insert after it
-      const afterPos = info.blockEnd;
-      const rest = stream.slice(afterPos);
-      const nextQ = rest.match(/q\s[\s\S]*?Q(?:\s|$)/);
-      if (nextQ) {
-        const insertAt = afterPos + nextQ.index! + nextQ[0].length;
-        const s = stream.slice(0, info.blockStart) + stream.slice(info.blockEnd, insertAt) + block + stream.slice(insertAt);
-        streams[info.streamIndex] = s;
+      // Insert after the next image block
+      if (myIdx >= 0 && myIdx + 1 < allImageOps.length) {
+        const next = allImageOps[myIdx + 1];
+        // Remove our block first, then insert after next block's adjusted position
+        const s = stream.slice(0, info.blockStart) + stream.slice(info.blockEnd);
+        const adjustedNextEnd = next.blockEnd - (info.blockEnd - info.blockStart);
+        streams[info.streamIndex] = s.slice(0, adjustedNextEnd) + "\n" + block + s.slice(adjustedNextEnd);
       } else {
-        // No next block — move to end
         streams[info.streamIndex] = withoutBlock + "\n" + block;
       }
       break;
     }
     case "backward": {
-      // Find the previous q...Q block before our position and insert before it
-      const before = stream.slice(0, info.blockStart);
-      // Find the last q...Q block in the 'before' string
-      const qBlocks = [...before.matchAll(/q\s[\s\S]*?Q(?:\s|$)/g)];
-      if (qBlocks.length > 0) {
-        const lastBlock = qBlocks[qBlocks.length - 1];
-        const insertAt = lastBlock.index!;
-        const s = stream.slice(0, insertAt) + block + stream.slice(insertAt, info.blockStart) + stream.slice(info.blockEnd);
-        streams[info.streamIndex] = s;
+      // Insert before the previous image block
+      if (myIdx > 0) {
+        const prev = allImageOps[myIdx - 1];
+        // Remove our block first, then insert before prev block (offset unchanged since prev is before us)
+        const s = stream.slice(0, info.blockStart) + stream.slice(info.blockEnd);
+        streams[info.streamIndex] = s.slice(0, prev.blockStart) + block + "\n" + s.slice(prev.blockStart);
       } else {
-        // No previous block — move to start
-        streams[info.streamIndex] = block + "\n" + withoutBlock;
+        streams[info.streamIndex] = stream; // already first
       }
       break;
     }

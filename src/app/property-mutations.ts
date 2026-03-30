@@ -113,6 +113,13 @@ export async function applyUndo(entry: { annotId: string; property: string; prev
       }
       break;
     }
+    case "reorderImage": {
+      if (isImage) {
+        const imageIndex = parseInt(entry.annotId.split("-")[1]);
+        await rpc().send({ type: "reorderImage", page: pageIndex, imageIndex, direction: value } as any);
+      }
+      break;
+    }
     case "rearrangePages": {
       const resp = await rpc().send({ type: "rearrangePages", order: value });
       if (resp.type === "pagesUpdated") {

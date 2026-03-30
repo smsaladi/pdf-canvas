@@ -285,6 +285,9 @@ function init() {
     if (property === "reorderImage" && annotId.startsWith("img")) {
       const page = parseInt(annotId.split("-")[0].replace("img", ""));
       const imageIndex = parseInt(annotId.split("-")[1]);
+      // Reverse direction for undo
+      const reverseDir: Record<string, string> = { front: "back", back: "front", forward: "backward", backward: "forward" };
+      undoManager.push({ annotId, property: "reorderImage", previousValue: reverseDir[value] || value, newValue: value });
       await rpc.send({ type: "reorderImage", page, imageIndex, direction: value } as any);
       markDirty();
       await viewport.rerenderPage(page);
