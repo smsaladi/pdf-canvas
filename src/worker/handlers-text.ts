@@ -502,7 +502,9 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
           if (!refBuffer) continue;
           let fontBufferToUse: ArrayBuffer;
           if (missingInThisFont.length > 0) {
-            const augmented = augmentFont(subsetBuffer, refBuffer, missingInThisFont);
+            // Subsetted fonts (ABCDEF+ prefix) have unreliable cmaps — force new slots
+            const isSubsetted = /^[A-Z]{6}\+/.test(baseFontName);
+            const augmented = augmentFont(subsetBuffer, refBuffer, missingInThisFont, isSubsetted);
             if (!augmented) continue;
             fontBufferToUse = augmented;
             console.log(`[FontAugment] Augmented ${missingInThisFont.length} glyph(s)`);
