@@ -12,10 +12,11 @@ import { SearchBar } from "./search";
 import { ThumbnailSidebar } from "./thumbnails";
 
 import { app } from "./app/state";
-import { markDirty, markClean, findWidget, showWelcome, updatePageDisplay, isEditingText } from "./app/utils";
+import { markDirty, markClean, findWidget, showWelcome, updatePageDisplay, updateToolbarState, isEditingText } from "./app/utils";
 import { applyPropertyChange, applyUndo } from "./app/property-mutations";
 import { openFile, openFilePicker, saveFile, insertImage, setupDragDrop, createBlankCanvas } from "./app/file-ops";
 import { handleKeyDown } from "./app/keyboard";
+import { saveSession, loadSession, clearSession } from "./app/session-db";
 
 function init() {
   const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
@@ -147,9 +148,23 @@ function init() {
   // Color picker
   const colorInput = document.getElementById("toolbar-color") as HTMLInputElement;
   const colorSwatch = document.getElementById("color-swatch")!;
-  colorSwatch.style.backgroundColor = colorInput.value;
+  const borderIconRect = document.querySelector(".border-icon-rect") as SVGElement | null;
+  const borderIconSlash = document.querySelector(".border-icon-slash") as SVGElement | null;
+  const fillIconRect = document.querySelector(".fill-icon-rect") as SVGElement | null;
+
+  const updateBorderIcon = (hex: string) => {
+    colorSwatch.style.backgroundColor = hex;
+    borderIconRect?.setAttribute("stroke", hex);
+    borderIconSlash?.setAttribute("stroke", hex);
+  };
+  const updateFillIcon = (hex: string) => {
+    fillSwatch.style.backgroundColor = hex;
+    fillIconRect?.setAttribute("fill", hex);
+  };
+
+  updateBorderIcon(colorInput.value);
   colorInput.addEventListener("input", async () => {
-    colorSwatch.style.backgroundColor = colorInput.value;
+    updateBorderIcon(colorInput.value);
     const hex = colorInput.value;
     const r = parseInt(hex.slice(1, 3), 16) / 255;
     const g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -171,9 +186,9 @@ function init() {
   // Fill color picker
   const fillColorInput = document.getElementById("toolbar-fill-color") as HTMLInputElement;
   const fillSwatch = document.getElementById("fill-swatch")!;
-  fillSwatch.style.backgroundColor = fillColorInput.value;
+  updateFillIcon(fillColorInput.value);
   fillColorInput.addEventListener("input", async () => {
-    fillSwatch.style.backgroundColor = fillColorInput.value;
+    updateFillIcon(fillColorInput.value);
     const hex = fillColorInput.value;
     const r = parseInt(hex.slice(1, 3), 16) / 255;
     const g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -308,6 +323,14 @@ function init() {
     propsPanel.classList.remove("hidden");
     propsToggle.classList.remove("visible");
   });
+
+  // Thumbnail sidebar toggle
+  const thumbSidebarEl = document.getElementById("thumbnail-sidebar")!;
+  const thumbToggle = document.getElementById("btn-toggle-thumbs")!;
+  thumbToggle.addEventListener("click", () => {
+    thumbSidebarEl.classList.remove("hidden");
+    thumbToggle.classList.remove("visible");
+  });
   document.getElementById("btn-welcome-open")?.addEventListener("click", openFilePicker);
   document.getElementById("btn-welcome-new")?.addEventListener("click", () => createBlankCanvas());
   // Click anywhere on welcome area to open file picker
@@ -361,12 +384,6 @@ function init() {
     const entry = undoManager.redo();
     if (entry) await applyUndo(entry, entry.newValue);
   });
-  undoManager.onChange(() => {
-    btnUndo.disabled = !undoManager.canUndo();
-    btnRedo.disabled = !undoManager.canRedo();
-    markDirty();
-  });
-
   // Page navigation
   document.getElementById("btn-prev-page")!.addEventListener("click", () => {
     const cur = viewport.getCurrentPage();
@@ -451,7 +468,57 @@ function init() {
     if (app.hasOpenDocument) e.preventDefault();
   });
 
-  showWelcome(true);
+  // Try to restore session from IndexedDB (persists across Ctrl+R)
+  loadSession().then(async (session) => {
+    if (session) {
+      try {
+        app.currentFilename = session.filename;
+        showWelcome(false);
+        await viewport.openDocument(session.pdfBuffer);
+        app.hasOpenDocument = true;
+        undoManager.clear();
+        if (session.zoom) viewport.setZoom(session.zoom);
+        if (session.currentPage) viewport.scrollToPage(session.currentPage);
+        updatePageDisplay();
+        updateToolbarState();
+        document.title = `${session.filename} — PDF Canvas`;
+        console.log(`[Session] Restored "${session.filename}" from IndexedDB`);
+        return;
+      } catch (err) {
+        console.warn("[Session] Failed to restore:", err);
+      }
+    }
+    showWelcome(true);
+    updateToolbarState();
+  });
+
+  // Auto-save to IndexedDB on mutations (debounced 2s)
+  let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleAutoSave = () => {
+    if (!app.hasOpenDocument) return;
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(async () => {
+      try {
+        const response = await rpc.send({ type: "save", options: "incremental" });
+        if (response.type === "saved") {
+          await saveSession(
+            response.buffer,
+            app.currentFilename,
+            viewport.getCurrentPage(),
+            viewport.getZoom(),
+          );
+        }
+      } catch (err) {
+        console.warn("[Session] Auto-save failed:", err);
+      }
+    }, 2000);
+  };
+  undoManager.onChange(() => {
+    btnUndo.disabled = !undoManager.canUndo();
+    btnRedo.disabled = !undoManager.canRedo();
+    markDirty();
+    scheduleAutoSave();
+  });
 
   // --- JS-based toolbar tooltips (positioned to stay on-screen) ---
   const tooltip = document.createElement("div");

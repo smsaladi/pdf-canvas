@@ -42,8 +42,8 @@ export interface InteractionContext {
   viewport: Viewport;
   overlayContainers: Map<number, HTMLDivElement>;
   overlayElements: Map<string, HTMLDivElement>;
-  selectedId: string | null;
-  selectionListeners: Array<(annotation: AnnotationDTO | null) => void>;
+  selectedIds: Set<string>;
+  selectionListeners: Array<(annotation: AnnotationDTO | null, allSelected?: AnnotationDTO[]) => void>;
   mutationListeners: Array<(annotId: string, property: string, oldValue: any, newValue: any) => void>;
   dragState: DragState | null;
   creationState: CreationState | null;
@@ -58,7 +58,7 @@ export interface InteractionContext {
 
   // Methods that sub-modules need to call back into the class
   canSelect(): boolean;
-  select(annotId: string | null): void;
+  select(annotId: string | null, addToSelection?: boolean): void;
   startDrag(annotId: string, e: PointerEvent, handle: string | null): void;
   startCreation(pageIndex: number, e: PointerEvent): void;
   startInlineEdit(annotId: string): void;

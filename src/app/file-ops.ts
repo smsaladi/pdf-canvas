@@ -1,6 +1,7 @@
 // File operations: open, save, insert image, drag-drop
 import { app, rpc, viewport, interaction, undoManager } from "./state";
 import { markDirty, markClean, updatePageDisplay, showWelcome } from "./utils";
+import { saveSession, clearSession } from "./session-db";
 
 export async function openFile(file: File): Promise<void> {
   app.currentFilename = file.name;
@@ -13,6 +14,8 @@ export async function openFile(file: File): Promise<void> {
     viewport().fitToWidth();
     updatePageDisplay();
     document.title = `${file.name} — PDF Canvas`;
+    // Persist to IndexedDB for session restore on Ctrl+R
+    saveSession(buffer, file.name, 0, viewport().getZoom()).catch(() => {});
   } catch (err: any) {
     alert(`Failed to open PDF: ${err.message}`);
     showWelcome(true);
@@ -42,6 +45,7 @@ export async function createBlankCanvas(): Promise<void> {
       viewport().fitToWidth();
       updatePageDisplay();
       document.title = "Untitled — PDF Canvas";
+      // Session will be saved on next auto-save trigger
     }
   } catch (err: any) {
     alert(`Failed to create blank canvas: ${err.message}`);

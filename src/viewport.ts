@@ -59,6 +59,37 @@ export class Viewport {
       },
       { passive: false }
     );
+
+    // Pinch-zoom for touch devices
+    this.setupPinchZoom();
+  }
+
+  private setupPinchZoom(): void {
+    let initialDistance = 0;
+    let initialZoom = 1;
+
+    this.container.addEventListener("touchstart", (e) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const t1 = e.touches[0], t2 = e.touches[1];
+        initialDistance = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        initialZoom = this.scale;
+      }
+    }, { passive: false });
+
+    this.container.addEventListener("touchmove", (e) => {
+      if (e.touches.length === 2 && initialDistance > 0) {
+        e.preventDefault();
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const currentDistance = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        const factor = currentDistance / initialDistance;
+        this.setZoom(initialZoom * factor);
+      }
+    }, { passive: false });
+
+    this.container.addEventListener("touchend", () => {
+      initialDistance = 0;
+    });
   }
 
   on(listener: ViewportListener): () => void {

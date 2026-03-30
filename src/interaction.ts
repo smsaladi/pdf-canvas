@@ -14,14 +14,14 @@ import { startDrag as startDragImpl, handleDragMove, handleDragEnd } from "./int
 import { startCreation as startCreationImpl, handleCreationMove, finishCreation as finishCreationImpl } from "./interaction/creation";
 import { startInlineEdit as startInlineEditImpl, cancelInlineEdit as cancelInlineEditImpl } from "./interaction/inline-edit";
 
-export type SelectionListener = (annotation: AnnotationDTO | null) => void;
+export type SelectionListener = (annotation: AnnotationDTO | null, allSelected?: AnnotationDTO[]) => void;
 export type MutationListener = (annotId: string, property: string, oldValue: any, newValue: any) => void;
 
 export class InteractionLayer implements InteractionContext {
   viewport: Viewport;
   overlayContainers = new Map<number, HTMLDivElement>();
   overlayElements = new Map<string, HTMLDivElement>();
-  selectedId: string | null = null;
+  selectedIds = new Set<string>();
   selectionListeners: SelectionListener[] = [];
   mutationListeners: MutationListener[] = [];
   dragState: DragState | null = null;
@@ -98,74 +98,127 @@ export class InteractionLayer implements InteractionContext {
     }
   }
 
+  /** Get the primary selected annotation (first in set, for backward compat) */
   getSelectedAnnotation(): AnnotationDTO | null {
-    if (!this.selectedId) return null;
-    return this.getAnnotationForId(this.selectedId);
+    if (this.selectedIds.size === 0) return null;
+    const firstId = [...this.selectedIds][0];
+    return this.getAnnotationForId(firstId);
   }
 
+  /** Get the primary selected ID (first in set) */
   getSelectedId(): string | null {
-    return this.selectedId;
+    if (this.selectedIds.size === 0) return null;
+    return [...this.selectedIds][0];
   }
 
-  select(annotId: string | null): void {
-    if (this.selectedId === annotId) return;
+  /** Get all selected IDs */
+  getSelectedIds(): Set<string> {
+    return this.selectedIds;
+  }
 
+  /** Get all selected annotations */
+  getSelectedAnnotations(): AnnotationDTO[] {
+    const result: AnnotationDTO[] = [];
+    for (const id of this.selectedIds) {
+      const a = this.getAnnotationForId(id);
+      if (a) result.push(a);
+    }
+    return result;
+  }
+
+  select(annotId: string | null, addToSelection = false): void {
     if (this.activeInlineEdit && this.activeInlineEdit.annotId !== annotId) {
       this.cancelInlineEdit();
     }
 
-    if (this.selectedId) {
-      const prev = this.overlayElements.get(this.selectedId);
-      if (prev) {
-        prev.classList.remove("selected");
-        prev.style.cursor = "";
-        removeHandles(prev);
+    if (addToSelection && annotId) {
+      // Shift+click: toggle this ID in the selection set
+      if (this.selectedIds.has(annotId)) {
+        // Remove from selection
+        this.selectedIds.delete(annotId);
+        const el = this.overlayElements.get(annotId);
+        if (el) { el.classList.remove("selected"); el.style.cursor = ""; removeHandles(el); }
+      } else {
+        // Add to selection
+        this.selectedIds.add(annotId);
+        const el = this.overlayElements.get(annotId);
+        if (el) { el.classList.add("selected"); el.style.cursor = "move"; }
+      }
+      // Resize handles only for single selection
+      if (this.selectedIds.size === 1) {
+        const onlyId = [...this.selectedIds][0];
+        const el = this.overlayElements.get(onlyId);
+        if (el) addHandles(this, el);
+      } else {
+        // Remove handles from all
+        for (const id of this.selectedIds) {
+          const el = this.overlayElements.get(id);
+          if (el) removeHandles(el);
+        }
+      }
+    } else {
+      // Normal click: replace selection
+      if (this.selectedIds.size === 1 && this.selectedIds.has(annotId!)) return;
+
+      // Deselect all current
+      for (const id of this.selectedIds) {
+        const el = this.overlayElements.get(id);
+        if (el) { el.classList.remove("selected"); el.style.cursor = ""; removeHandles(el); }
+      }
+      this.selectedIds.clear();
+
+      if (annotId) {
+        this.selectedIds.add(annotId);
+        const el = this.overlayElements.get(annotId);
+        if (el) {
+          el.classList.add("selected");
+          el.style.cursor = "move";
+          addHandles(this, el);
+        }
       }
     }
 
-    this.selectedId = annotId;
-
-    if (annotId) {
-      const el = this.overlayElements.get(annotId);
-      if (el) {
-        el.classList.add("selected");
-        el.style.cursor = "move";
-        addHandles(this, el);
-      }
-    }
-
+    // Notify listeners
     const annotation = this.getSelectedAnnotation();
+    const allSelected = this.getSelectedAnnotations();
     for (const listener of this.selectionListeners) {
-      listener(annotation);
+      listener(annotation, allSelected);
     }
   }
 
   async deleteSelected(): Promise<void> {
-    const annot = this.getSelectedAnnotation();
-    if (!annot) return;
+    const allAnnots = this.getSelectedAnnotations();
+    if (allAnnots.length === 0) return;
 
     const rpc = this.viewport.getRpc();
-    const annotId = annot.id;
+    const pagesToRerender = new Set<number>();
 
-    if (this.undoManager) {
-      this.undoManager.push({
-        annotId,
-        property: "delete",
-        previousValue: annot,
-        newValue: null,
-      });
+    for (const annot of allAnnots) {
+      if (this.undoManager) {
+        this.undoManager.push({
+          annotId: annot.id,
+          property: "delete",
+          previousValue: annot,
+          newValue: null,
+        });
+      }
+      pagesToRerender.add(annot.page);
     }
 
     this.select(null);
 
-    if (annotId.startsWith("img")) {
-      // Embedded page content image — delete via content stream manipulation
-      const imageIndex = parseInt(annotId.split("-")[1]);
-      await rpc.send({ type: "deleteImage", page: annot.page, imageIndex } as any);
-    } else {
-      await rpc.send({ type: "deleteAnnot", annotId });
+    for (const annot of allAnnots) {
+      if (annot.id.startsWith("img")) {
+        const imageIndex = parseInt(annot.id.split("-")[1]);
+        await rpc.send({ type: "deleteImage", page: annot.page, imageIndex } as any);
+      } else {
+        await rpc.send({ type: "deleteAnnot", annotId: annot.id });
+      }
     }
-    await this.viewport.rerenderPage(annot.page);
+
+    for (const page of pagesToRerender) {
+      await this.viewport.rerenderPage(page);
+    }
   }
 
   async moveAnnot(annotId: string, newRect: [number, number, number, number]): Promise<void> {

@@ -91,6 +91,7 @@ body {
 .tb:disabled {
   opacity: 0.35;
   cursor: default;
+  pointer-events: auto;
 }
 
 .tb:disabled:hover {
@@ -162,6 +163,12 @@ body {
   outline: 1px solid var(--accent);
 }
 
+.page-input:disabled,
+.zoom-input:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .page-total {
   font-size: 13px;
   color: var(--text-secondary);
@@ -195,6 +202,33 @@ body {
 }
 
 /* Thumbnail sidebar */
+
+.thumb-toggle-btn {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--bg-toolbar);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 6px;
+  cursor: pointer;
+  z-index: 5;
+  display: none;
+}
+
+.thumb-toggle-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.thumb-toggle-btn.visible {
+  display: block;
+}
+
+#thumbnail-sidebar.hidden {
+  display: none !important;
+}
 
 #thumbnail-sidebar {
   width: 120px;
@@ -286,6 +320,21 @@ body {
 
 .thumb-item.active .thumb-canvas {
   border-color: var(--accent);
+}
+
+.thumb-close-btn {
+  display: block;
+  margin: 0 auto 4px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px 8px;
+}
+
+.thumb-close-btn:hover {
+  color: var(--text-primary);
 }
 
 .thumb-label {
@@ -437,6 +486,14 @@ body {
 .handle-s  { bottom: calc(-1 * var(--handle-size) / 2); left: calc(50% - var(--handle-size) / 2); cursor: s-resize; }
 .handle-sw { bottom: calc(-1 * var(--handle-size) / 2); left: calc(-1 * var(--handle-size) / 2); cursor: sw-resize; }
 .handle-w  { top: calc(50% - var(--handle-size) / 2); left: calc(-1 * var(--handle-size) / 2); cursor: w-resize; }
+
+/* Touch device: larger handles and touch targets */
+@media (hover: none) and (pointer: coarse) {
+  :root { --handle-size: 22px; }
+  .annot-overlay { min-width: 44px; min-height: 44px; }
+  .resize-handle { border-width: 2px; border-radius: 3px; }
+  #viewport { touch-action: manipulation; }
+}
 
 /* Welcome / Drop zone */
 
@@ -782,12 +839,7 @@ body {
 }
 
 .color-swatch {
-  display: block;
-  width: 16px;
-  height: 16px;
-  border-radius: 0;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  margin-left: 4px;
+  display: none;
 }
 
 /* Widget overlays */

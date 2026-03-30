@@ -69,9 +69,9 @@ export function renderOverlaysForPage(ctx: InteractionContext, pageIndex: number
     if (overlay) {
       container.appendChild(overlay);
       ctx.overlayElements.set(annot.id, overlay);
-      if (annot.id === ctx.selectedId) {
+      if (ctx.selectedIds.has(annot.id)) {
         overlay.classList.add("selected");
-        addHandles(ctx, overlay);
+        if (ctx.selectedIds.size === 1) addHandles(ctx, overlay);
       }
     }
   }
@@ -106,7 +106,7 @@ export function renderWidgetOverlaysForPage(ctx: InteractionContext, pageIndex: 
     div.addEventListener("pointerdown", (e) => {
       if (!ctx.canSelect()) return;
       e.stopPropagation();
-      ctx.select(widget.id);
+      ctx.select(widget.id, e.shiftKey);
       if (!(e.target as HTMLElement).classList.contains("resize-handle")) {
         ctx.startDrag(widget.id, e, null);
       }
@@ -115,7 +115,7 @@ export function renderWidgetOverlaysForPage(ctx: InteractionContext, pageIndex: 
     container.appendChild(div);
     ctx.overlayElements.set(widget.id, div);
 
-    if (widget.id === ctx.selectedId) {
+    if (ctx.selectedIds.has(widget.id)) {
       div.classList.add("selected");
       addHandles(ctx, div);
     }
@@ -150,7 +150,7 @@ export function renderImageOverlaysForPage(ctx: InteractionContext, pageIndex: n
     div.addEventListener("pointerdown", (e) => {
       if (!ctx.canSelect()) return;
       e.stopPropagation();
-      ctx.select(img.id);
+      ctx.select(img.id, e.shiftKey);
       if (!(e.target as HTMLElement).classList.contains("resize-handle")) {
         ctx.startDrag(img.id, e, null);
       }
@@ -159,7 +159,7 @@ export function renderImageOverlaysForPage(ctx: InteractionContext, pageIndex: n
     container.appendChild(div);
     ctx.overlayElements.set(img.id, div);
 
-    if (img.id === ctx.selectedId) {
+    if (ctx.selectedIds.has(img.id)) {
       div.classList.add("selected");
       addHandles(ctx, div);
     }
@@ -209,7 +209,7 @@ export function createOverlay(ctx: InteractionContext, annot: AnnotationDTO): HT
     if (!ctx.canSelect()) return;
     e.stopPropagation();
     if (ctx.activeInlineEdit?.annotId === annot.id && (e.target as HTMLElement).classList.contains("freetext-inline-edit")) return;
-    ctx.select(annot.id);
+    ctx.select(annot.id, e.shiftKey);
     if (!(e.target as HTMLElement).classList.contains("resize-handle")) {
       ctx.startDrag(annot.id, e, null);
     }
@@ -270,7 +270,7 @@ export function createQuadPointOverlay(ctx: InteractionContext, annot: Annotatio
   div.addEventListener("pointerdown", (e) => {
     if (!ctx.canSelect()) return;
     e.stopPropagation();
-    ctx.select(annot.id);
+    ctx.select(annot.id, e.shiftKey);
     ctx.startDrag(annot.id, e, null);
   });
 
@@ -307,7 +307,7 @@ export function updateAllOverlayPositions(ctx: InteractionContext): void {
         el.style.width = `${s.width}px`; el.style.height = `${s.height}px`;
       }
 
-      if (annot.id === ctx.selectedId) {
+      if (ctx.selectedIds.has(annot.id) && ctx.selectedIds.size === 1) {
         removeHandles(el);
         addHandles(ctx, el);
       }

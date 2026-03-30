@@ -5,6 +5,7 @@ import { applyUndo } from "./property-mutations";
 import { openFilePicker, saveFile } from "./file-ops";
 
 let clipboardAnnot: import("../types").AnnotationDTO | null = null;
+let clipboardAnnots: import("../types").AnnotationDTO[] = [];
 
 export async function handleKeyDown(e: KeyboardEvent): Promise<void> {
   // Escape: deselect
@@ -85,10 +86,11 @@ export async function handleKeyDown(e: KeyboardEvent): Promise<void> {
 
   // Copy: Ctrl+C (annotation, not text)
   if ((e.ctrlKey || e.metaKey) && e.key === "c" && !isEditingText()) {
-    const annot = interaction().getSelectedAnnotation();
-    if (annot) {
+    const allSelected = interaction().getSelectedAnnotations();
+    if (allSelected.length > 0) {
       e.preventDefault();
-      clipboardAnnot = { ...annot };
+      clipboardAnnot = allSelected.length === 1 ? { ...allSelected[0] } : { ...allSelected[0] };
+      clipboardAnnots = allSelected.map(a => ({ ...a }));
     }
     return;
   }
