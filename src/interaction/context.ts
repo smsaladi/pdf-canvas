@@ -68,4 +68,5 @@ export interface InteractionContext {
   moveQuadPoints(annotId: string, newQuadPoints: number[][]): Promise<void>;
   getAnnotationForId(id: string): AnnotationDTO | null;
   getAnnotationForElement(el: HTMLDivElement): AnnotationDTO | null;
+  snapshotForUndo(): Promise<ArrayBuffer | null>;
 }

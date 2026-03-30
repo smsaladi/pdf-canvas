@@ -50,11 +50,17 @@ export async function handleDragEnd(ctx: InteractionContext, e: PointerEvent): P
   if (!ctx.dragState) return;
 
   const { annotId, startScreenX, startScreenY, handle, originalAnnotRect, originalQuadPoints } = ctx.dragState;
-  const dx = e.clientX - startScreenX;
-  const dy = e.clientY - startScreenY;
+  let dx = e.clientX - startScreenX;
+  let dy = e.clientY - startScreenY;
   ctx.dragState = null;
 
   if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+
+  // Shift: constrain move to axis
+  if (e.shiftKey && handle === null) {
+    if (Math.abs(dx) > Math.abs(dy)) dy = 0;
+    else dx = 0;
+  }
 
   const scale = ctx.viewport.getScale();
   const annot = ctx.getAnnotationForId(annotId);
@@ -62,6 +68,13 @@ export async function handleDragEnd(ctx: InteractionContext, e: PointerEvent): P
 
   const pdfDx = dx / scale;
   const pdfDy = dy / scale;
+  const isImage = annotId.startsWith("img");
+
+  // For images: snapshot before the content stream change for reliable undo
+  let snapshot: ArrayBuffer | null = null;
+  if (isImage) {
+    snapshot = await ctx.snapshotForUndo();
+  }
 
   if (handle === null) {
     if (QUADPOINT_TYPES.has(annot.type) && originalQuadPoints && originalQuadPoints.length > 0) {
@@ -87,15 +100,23 @@ export async function handleDragEnd(ctx: InteractionContext, e: PointerEvent): P
       ];
 
       if (ctx.undoManager) {
-        ctx.undoManager.push({ annotId, property: "rect", previousValue: originalAnnotRect, newValue: newRect });
+        if (isImage && snapshot) {
+          ctx.undoManager.push({ annotId, property: "textEdit", previousValue: snapshot, newValue: newRect });
+        } else {
+          ctx.undoManager.push({ annotId, property: "rect", previousValue: originalAnnotRect, newValue: newRect });
+        }
       }
       await ctx.moveAnnot(annotId, newRect);
     }
   } else {
-    const newRect = computeResizedRect(handle, pdfDx, pdfDy, originalAnnotRect);
+    const newRect = computeResizedRect(handle, pdfDx, pdfDy, originalAnnotRect, e.shiftKey);
 
     if (ctx.undoManager) {
-      ctx.undoManager.push({ annotId, property: "rect", previousValue: originalAnnotRect, newValue: newRect });
+      if (isImage && snapshot) {
+        ctx.undoManager.push({ annotId, property: "textEdit", previousValue: snapshot, newValue: newRect });
+      } else {
+        ctx.undoManager.push({ annotId, property: "rect", previousValue: originalAnnotRect, newValue: newRect });
+      }
     }
     await ctx.moveAnnot(annotId, newRect);
   }
@@ -149,14 +170,38 @@ export function applyResize(
 
 export function computeResizedRect(
   handle: string, pdfDx: number, pdfDy: number,
-  orig: [number, number, number, number]
+  orig: [number, number, number, number],
+  shiftKey = false
 ): [number, number, number, number] {
   let [x1, y1, x2, y2] = orig;
+  const origW = x2 - x1, origH = y2 - y1;
 
   if (handle.includes("w")) x1 += pdfDx;
   if (handle.includes("e")) x2 += pdfDx;
   if (handle.includes("n")) y1 += pdfDy;
   if (handle.includes("s")) y2 += pdfDy;
+
+  // Shift: maintain aspect ratio
+  if (shiftKey && origW > 0 && origH > 0) {
+    const aspect = origW / origH;
+    let newW = x2 - x1, newH = y2 - y1;
+    if (handle.length === 2) {
+      // Corner handle
+      if (Math.abs(newW - origW) > Math.abs(newH - origH)) {
+        newH = newW / aspect;
+      } else {
+        newW = newH * aspect;
+      }
+    } else {
+      // Edge handle
+      if (handle === "e" || handle === "w") newH = newW / aspect;
+      else newW = newH * aspect;
+    }
+    if (handle.includes("w")) x1 = x2 - newW;
+    else x2 = x1 + newW;
+    if (handle.includes("n")) y1 = y2 - newH;
+    else y2 = y1 + newH;
+  }
 
   if (x2 - x1 < 5) { if (handle.includes("w")) x1 = x2 - 5; else x2 = x1 + 5; }
   if (y2 - y1 < 5) { if (handle.includes("n")) y1 = y2 - 5; else y2 = y1 + 5; }

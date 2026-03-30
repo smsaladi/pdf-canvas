@@ -195,24 +195,24 @@ export class InteractionLayer implements InteractionContext {
 
     this.select(null);
 
+    // Snapshot before image deletions for reliable undo
+    const hasImages = allAnnots.some(a => a.id.startsWith("img"));
+    let snapshot: ArrayBuffer | null = null;
+    if (hasImages) {
+      snapshot = await this.snapshotForUndo();
+    }
+
     for (const annot of allAnnots) {
       pagesToRerender.add(annot.page);
 
       if (annot.id.startsWith("img")) {
         const imageIndex = parseInt(annot.id.split("-")[1]);
-        const response = await rpc.send({ type: "deleteImage", page: annot.page, imageIndex } as any);
-        // Store the deleted content stream block for undo
-        if (this.undoManager) {
-          const undoData: any = { ...annot };
-          if ((response as any).deletedBlock) {
-            undoData._deletedBlock = (response as any).deletedBlock;
-            undoData._streamIndex = (response as any).streamIndex;
-            undoData._insertPosition = (response as any).insertPosition;
-          }
+        await rpc.send({ type: "deleteImage", page: annot.page, imageIndex } as any);
+        if (this.undoManager && snapshot) {
           this.undoManager.push({
             annotId: annot.id,
-            property: "delete",
-            previousValue: undoData,
+            property: "textEdit", // uses snapshot-based undo
+            previousValue: snapshot,
             newValue: null,
           });
         }
@@ -237,13 +237,22 @@ export class InteractionLayer implements InteractionContext {
   async moveAnnot(annotId: string, newRect: [number, number, number, number]): Promise<void> {
     const rpc = this.viewport.getRpc();
     if (annotId.startsWith("img")) {
-      // Embedded page content image — move/resize via content stream CTM
       const page = parseInt(annotId.split("-")[0].replace("img", ""));
       const imageIndex = parseInt(annotId.split("-")[1]);
       await rpc.send({ type: "moveResizeImage", page, imageIndex, newRect } as any);
     } else {
       await rpc.send({ type: "setAnnotRect", annotId, rect: newRect });
     }
+  }
+
+  /** Take a document snapshot for undo of content stream operations */
+  async snapshotForUndo(): Promise<ArrayBuffer | null> {
+    try {
+      const rpc = this.viewport.getRpc();
+      const snap = await rpc.send({ type: "save", options: "incremental" });
+      if (snap.type === "saved") return snap.buffer;
+    } catch {}
+    return null;
   }
 
   async moveQuadPoints(annotId: string, newQuadPoints: number[][]): Promise<void> {
