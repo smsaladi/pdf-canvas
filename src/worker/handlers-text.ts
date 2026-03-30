@@ -151,6 +151,9 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
                     for (const fk of fKeys) {
                       const fo = fDict.get(fk);
                       if (fo.get("Subtype").asName() === "Type0") {
+                        // Match against the font used by the selected text
+                        const bfn = fo.get("BaseFont").asName();
+                        if (request.fontName && bfn !== request.fontName) continue;
                         const desc = fo.get("DescendantFonts");
                         if (desc.isArray() && desc.length > 0) {
                           const ff2 = desc.get(0).get("FontDescriptor")?.get("FontFile2");
@@ -200,6 +203,9 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
                           for (const fk of fKeys2) {
                             const fo = fDict2.get(fk);
                             if (fo.get("Subtype").asName() !== "Type0") continue;
+                            // Match against the font used by the selected text
+                            const augBaseName = fo.get("BaseFont").asName();
+                            if (request.fontName && augBaseName !== request.fontName) continue;
 
                             const descFonts = fo.get("DescendantFonts");
                             if (!descFonts.isArray() || descFonts.length === 0) continue;
@@ -213,30 +219,95 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
                             const fontBuf = new ArrayBuffer(fontBytes.byteLength);
                             new Uint8Array(fontBuf).set(fontBytes);
 
-                            const baseName = fo.get("BaseFont").asName();
-                            const parsed = parseFontName(baseName);
+                            const parsed = parseFontName(augBaseName);
                             const match = matchReferenceFont(parsed);
                             const refBuf = fetchFont(match);
                             if (!refBuf) continue;
 
-                            const augmented = augmentFont(fontBuf, refBuf, missingFromCmap);
-                            if (augmented) {
-                              const newFont = new mupdf.Font(baseName, augmented);
-                              const newFontRes = getDoc().addFont(newFont);
-                              fDict2.put(fk, newFontRes);
-                              mupdf.emptyStore();
-                              console.log(`[ContentMap] ✓ Augmented font "${baseName}" with ${missingFromCmap.length} glyph(s)`);
+                            // Count glyphs in original font to predict GIDs assigned by augmentFont
+                            const FEFont2 = (await import("fonteditor-core")).Font;
+                            const origParsed = FEFont2.create(fontBuf.slice(0) as any, { type: "ttf" });
+                            const origData = origParsed.get();
+                            const origGlyphCount = origData?.glyf?.length || 0;
+                            const origCmap = origData?.cmap || {};
 
-                              const FEFont2 = (await import("fonteditor-core")).Font;
-                              const augParsedFE = FEFont2.create(augmented as any, { type: "ttf" });
-                              const augData = augParsedFE.get();
-                              const augCmap = augData.cmap || {};
+                            // forceNewSlots=true: CID font cmap is unreliable for subsetted fonts
+                            const augmented = augmentFont(fontBuf, refBuf, missingFromCmap, true);
+                            if (augmented) {
+                              // Write augmented font bytes directly to the FontFile2 stream
+                              // This preserves the Type0 font structure (ToUnicode, CIDFont, etc.)
+                              ff2.writeStream(new Uint8Array(augmented));
+                              mupdf.emptyStore();
+                              console.log(`[ContentMap] ✓ Augmented font "${augBaseName}" with ${missingFromCmap.length} glyph(s)`);
+
+                              // Map chars to GIDs: with forceNewSlots=true (CID fonts),
+                              // augmentFont always creates sequential GIDs starting from origGlyphCount.
+                              // The font's internal cmap is unreliable for CID fonts, so we NEVER
+                              // use origCmap here — all missing chars get new GIDs.
+                              let nextGid = origGlyphCount;
                               for (const ch of missingFromCmap) {
                                 const cp = ch.charCodeAt(0);
-                                const gid = augCmap[cp];
-                                if (gid !== undefined && gid > 0) {
-                                  unicodeToGid!.set(ch, gid);
-                                  console.log(`[ContentMap] Mapped "${ch}" (U+${cp.toString(16)}) → GID ${gid} (0x${gid.toString(16)})`);
+                                unicodeToGid!.set(ch, nextGid);
+                                console.log(`[ContentMap] Mapped "${ch}" (U+${cp.toString(16)}) → GID ${nextGid} (0x${nextGid.toString(16)})`);
+                                nextGid++;
+                              }
+                              // Reload fontForMetrics from augmented data so advanceGlyph works for new GIDs
+                              fontForMetrics = new mupdf.Font("metrics", augmented);
+
+                              // Update the CIDFont W (widths) array for new GIDs
+                              // Without this, MuPDF uses DW (default width) for spacing
+                              try {
+                                const wArray = cidFont.get("W");
+                                const unitsPerEm = origData?.head?.unitsPerEm || 2048;
+                                // Build width entries: [gid [width]] for each new glyph
+                                // Reference font advance widths are in font design units
+                                const newWidthEntries: Array<{ gid: number; width: number }> = [];
+                                let widthGidCounter = origGlyphCount;
+                                for (const ch2 of missingFromCmap) {
+                                  const advW = fontForMetrics.advanceGlyph(widthGidCounter);
+                                  const cidWidth = Math.round(advW * 1000);
+                                  newWidthEntries.push({ gid: widthGidCounter, width: cidWidth });
+                                  widthGidCounter++;
+                                }
+                                if (newWidthEntries.length > 0 && wArray && !wArray.isNull()) {
+                                  // Append new entries to existing W array
+                                  // W array format: [gid [w1 w2 ...] gid [w1 w2 ...] ...]
+                                  for (const { gid: wGid, width: wWidth } of newWidthEntries) {
+                                    const wLen = wArray.length;
+                                    wArray.push(wGid);
+                                    const widthArr = getDoc().newArray();
+                                    widthArr.push(wWidth);
+                                    wArray.push(widthArr);
+                                  }
+                                  console.log(`[ContentMap] Updated W array with ${newWidthEntries.length} new width entries`);
+                                }
+                              } catch (wErr) {
+                                console.warn("[ContentMap] Failed to update W array:", wErr);
+                              }
+
+                              // Update the ToUnicode CMap to include entries for newly added GIDs
+                              // Without this, text extraction shows � for new glyphs
+                              const toUnicode = fo.get("ToUnicode");
+                              if (toUnicode && toUnicode.isStream()) {
+                                let cmapData = toUnicode.readStream().asString();
+                                // Build new bfchar entries for the injected glyphs
+                                // All missing chars get sequential new GIDs (matching augmentFont with forceNewSlots)
+                                const newEntries: string[] = [];
+                                let gidCounter = origGlyphCount;
+                                for (const ch of missingFromCmap) {
+                                  const cp = ch.charCodeAt(0);
+                                  newEntries.push(`<${gidCounter.toString(16).padStart(4, "0")}> <${cp.toString(16).padStart(4, "0")}>`);
+                                  gidCounter++;
+                                }
+                                if (newEntries.length > 0) {
+                                  // Insert before "endcmap" at the end
+                                  const insertPoint = cmapData.lastIndexOf("endcmap");
+                                  if (insertPoint !== -1) {
+                                    const bfcharBlock = `${newEntries.length} beginbfchar\n${newEntries.join("\n")}\nendbfchar\n`;
+                                    cmapData = cmapData.slice(0, insertPoint) + bfcharBlock + cmapData.slice(insertPoint);
+                                    toUnicode.writeStream(cmapData);
+                                    console.log(`[ContentMap] Updated ToUnicode CMap with ${newEntries.length} new entries`);
+                                  }
                                 }
                               }
                             }
@@ -278,10 +349,41 @@ export async function handleReplaceTextSmart(request: any, respond: Respond, rpc
             }
 
             if (extra) {
-              const afterLastEdit = edited[lastMapping.streamIndex].slice(lastMapping.hexEnd);
-              const tjEndMatch = afterLastEdit.match(/>\s*Tj/);
-              const insertAt = lastMapping.hexEnd + (tjEndMatch ? tjEndMatch.index! + tjEndMatch[0].length : 5);
-              edited[lastMapping.streamIndex] = edited[lastMapping.streamIndex].slice(0, insertAt) + extra + edited[lastMapping.streamIndex].slice(insertAt);
+              const stream = edited[lastMapping.streamIndex];
+              const afterLastEdit = stream.slice(lastMapping.hexEnd);
+
+              // Check if we're inside a TJ array by looking for ] before the next operator
+              const closeBracket = afterLastEdit.match(/^[^)(\]]*?\]\s*TJ/);
+
+              if (closeBracket) {
+                // Inside a TJ array — build hex strings to insert inside the array
+                // TJ arrays use the font's natural advance width, so we just append hex strings
+                let tjExtra = "";
+                for (const ch of extraChars) {
+                  const gid = unicodeToGid.get(ch);
+                  if (gid !== undefined) {
+                    tjExtra += `<${gid.toString(16).padStart(4, "0")}>`;
+                  }
+                }
+                if (tjExtra) {
+                  // Find the ] closing the array and insert before it
+                  const bracketPos = afterLastEdit.indexOf("]");
+                  const insertAt = lastMapping.hexEnd + bracketPos;
+                  edited[lastMapping.streamIndex] = stream.slice(0, insertAt) + tjExtra + stream.slice(insertAt);
+                }
+              } else {
+                // Standalone Tj operators — use Td positioning
+                const tjEndMatch = afterLastEdit.match(/>\s*Tj/);
+                let insertAt: number;
+                if (tjEndMatch) {
+                  insertAt = lastMapping.hexEnd + tjEndMatch.index! + tjEndMatch[0].length;
+                } else {
+                  const etMatch = afterLastEdit.match(/ET/);
+                  insertAt = lastMapping.hexEnd + (etMatch ? etMatch.index! : 5);
+                  extra = `\nBT${extra}\nET`;
+                }
+                edited[lastMapping.streamIndex] = stream.slice(0, insertAt) + extra + stream.slice(insertAt);
+              }
             }
 
             if (contentsRef.isArray()) {

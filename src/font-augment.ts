@@ -364,7 +364,11 @@ export async function loadLocalFont(postscriptName: string): Promise<ArrayBuffer
 export function augmentFont(
   subsetBuffer: ArrayBuffer,
   referenceBuffer: ArrayBuffer,
-  missingChars: string[]
+  missingChars: string[],
+  /** When true, always create new glyph slots instead of reusing existing cmap entries.
+   *  Use this for CID/Type0 fonts where the font's internal cmap is unreliable
+   *  (subsetted fonts map codepoints to arbitrary glyph indices). */
+  forceNewSlots = false
 ): ArrayBuffer | null {
   try {
     // Parse the subset font with fonteditor-core (preserves TrueType format)
@@ -399,24 +403,26 @@ export function augmentFont(
       const codePoint = char.codePointAt(0);
       if (codePoint === undefined) continue;
 
-      // Find the glyph index for this codepoint in the subset
-      let glyphIndex = cmap[codePoint];
-      let isNewGlyph = false;
+      // Find or create a glyph slot for this character.
+      let glyphIndex: number;
+      const existingIndex = cmap[codePoint];
 
-      if (glyphIndex === undefined || glyphIndex === null) {
-        // No cmap entry — we need to APPEND a new glyph and add a cmap entry
+      if (!forceNewSlots && existingIndex !== undefined && existingIndex !== null) {
+        // For simple fonts (WinAnsi), the cmap is reliable — reuse if glyph has outlines
+        const existingGlyph = subsetData.glyf[existingIndex];
+        if (existingGlyph?.contours?.length > 0) {
+          continue; // Already has correct outlines
+        }
+        glyphIndex = existingIndex;
+      } else {
+        // For CID fonts (forceNewSlots=true) or missing cmap entry:
+        // always create a new slot. In subsetted CID fonts the internal cmap
+        // maps codepoints to arbitrary glyph indices, so existing entries
+        // are unreliable — the glyph at cmap[0x59] is NOT necessarily "Y".
         glyphIndex = subsetData.glyf.length;
         subsetData.glyf.push({ contours: [], xMin: 0, yMin: 0, xMax: 0, yMax: 0, advanceWidth: 0, leftSideBearing: 0, name: "" } as any);
         cmap[codePoint] = glyphIndex;
-        isNewGlyph = true;
         console.log(`[FontAugment] New glyph slot at index ${glyphIndex} for "${char}" (U+${codePoint.toString(16).padStart(4, "0")})`);
-      }
-
-      // Check if the glyph at this index is empty (or newly created)
-      const existingGlyph = subsetData.glyf[glyphIndex];
-      if (!isNewGlyph && existingGlyph && existingGlyph.contours && existingGlyph.contours.length > 0) {
-        // Already has outlines — skip
-        continue;
       }
 
       // Get the glyph from the reference font
@@ -477,7 +483,7 @@ export function augmentFont(
 
       // Replace the glyph data at the correct index
       subsetData.glyf[glyphIndex] = {
-        ...existingGlyph,
+        ...subsetData.glyf[glyphIndex],
         contours,
         advanceWidth: advW,
         leftSideBearing: lsb,
