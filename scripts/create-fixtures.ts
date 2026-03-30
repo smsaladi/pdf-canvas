@@ -436,6 +436,97 @@ ET
   save(doc, "with-styled-text.pdf");
 }
 
+// 12. with-type0-kerned-text.pdf — Type0/Identity-H with TJ arrays containing
+//     multi-glyph hex strings and kerning values, mimicking Chrome/iText output.
+//     Also includes two Type0 fonts (regular + bold) to test font targeting.
+function createWithType0KernedText() {
+  const doc = new mupdf.PDFDocument();
+
+  // Build two Type0 fonts: F1 (regular) and F2 (bold)
+  const testChars = [..."Hello World Test Line Bold"];
+  const uniqueChars = [...new Set(testChars)];
+
+  function buildType0Font(name: string): mupdf.PDFObject {
+    const bfcharEntries = uniqueChars
+      .map(ch => `<${ch.charCodeAt(0).toString(16).padStart(4, "0")}> <${ch.charCodeAt(0).toString(16).padStart(4, "0")}>`)
+      .join("\n");
+    const cmapStream = `/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def
+/CMapType 2 def
+1 begincodespacerange
+<0000><FFFF>
+endcodespacerange
+${uniqueChars.length} beginbfchar
+${bfcharEntries}
+endbfchar
+endcmap
+CMapSpelling CMapName /CMap defineresource pop
+end
+end`;
+    const toUnicodeRef = doc.addStream(cmapStream, doc.newDictionary());
+    const cidFontDict = doc.newDictionary();
+    cidFontDict.put("Type", doc.newName("Font"));
+    cidFontDict.put("Subtype", doc.newName("CIDFontType2"));
+    cidFontDict.put("BaseFont", doc.newName(name));
+    const cidSysInfo = doc.newDictionary();
+    cidSysInfo.put("Registry", doc.newString("Adobe"));
+    cidSysInfo.put("Ordering", doc.newString("Identity"));
+    cidSysInfo.put("Supplement", doc.newInteger(0));
+    cidFontDict.put("CIDSystemInfo", cidSysInfo);
+    // Add DW (default width)
+    cidFontDict.put("DW", doc.newInteger(1000));
+
+    const type0 = doc.newDictionary();
+    type0.put("Type", doc.newName("Font"));
+    type0.put("Subtype", doc.newName("Type0"));
+    type0.put("BaseFont", doc.newName(name));
+    type0.put("Encoding", doc.newName("Identity-H"));
+    const descFonts = doc.newArray();
+    descFonts.push(doc.addObject(cidFontDict));
+    type0.put("DescendantFonts", descFonts);
+    type0.put("ToUnicode", toUnicodeRef);
+    return doc.addObject(type0);
+  }
+
+  const f1Ref = buildType0Font("TestRegular");
+  const f2Ref = buildType0Font("TestBold");
+
+  const resources = doc.newDictionary();
+  const fonts = doc.newDictionary();
+  fonts.put("F1", f1Ref);
+  fonts.put("F2", f2Ref);
+  resources.put("Font", fonts);
+
+  // Helper: encode text as multi-glyph hex string
+  const toHex = (text: string) => [...text].map(ch => ch.charCodeAt(0).toString(16).padStart(4, "0")).join("");
+
+  // Content stream: TJ arrays with multi-glyph hex + kerning
+  const contentStream = `
+BT
+/F1 18 Tf
+72 700 Td
+[<${toHex("Hello")}> -50 <${toHex(" World")}>] TJ
+ET
+BT
+/F1 14 Tf
+72 660 Td
+[<${toHex("Test")}> -30 <${toHex(" Line")}>] TJ
+ET
+BT
+/F2 16 Tf
+72 620 Td
+[<${toHex("Bold")}> -40 <${toHex(" Text")}>] TJ
+ET
+`;
+
+  const pageObj = doc.addPage([0, 0, 612, 792], 0, resources, contentStream);
+  doc.insertPage(-1, pageObj);
+  save(doc, "with-type0-kerned-text.pdf");
+}
+
 // Run all generators
 createBlank();
 createWithAnnotations();
@@ -448,5 +539,6 @@ createWithImage();
 createWithType0Text();
 createWithMultilineText();
 createWithStyledText();
+createWithType0KernedText();
 
 console.log("\nAll fixtures generated successfully!");
