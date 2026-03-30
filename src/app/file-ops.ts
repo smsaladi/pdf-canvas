@@ -1,7 +1,7 @@
 // File operations: open, save, insert image, drag-drop
 import { app, rpc, viewport, interaction, undoManager } from "./state";
 import { markDirty, markClean, updatePageDisplay, showWelcome } from "./utils";
-import { saveSession, clearSession } from "./session-db";
+import { saveSession, clearSession, addRecentFile } from "./session-db";
 
 export async function openFile(file: File): Promise<void> {
   app.currentFilename = file.name;
@@ -16,6 +16,8 @@ export async function openFile(file: File): Promise<void> {
     document.title = `${file.name} — PDF Canvas`;
     // Persist to IndexedDB for session restore on Ctrl+R
     saveSession(buffer, file.name, 0, viewport().getZoom()).catch(() => {});
+    // Add to recent files list
+    addRecentFile(file.name, buffer).catch(() => {});
   } catch (err: any) {
     alert(`Failed to open PDF: ${err.message}`);
     showWelcome(true);
@@ -51,6 +53,120 @@ export async function createBlankCanvas(): Promise<void> {
     alert(`Failed to create blank canvas: ${err.message}`);
     showWelcome(true);
   }
+}
+
+export async function scanWithCamera(): Promise<void> {
+  const modal = document.getElementById("camera-modal")!;
+  const video = document.getElementById("camera-video") as HTMLVideoElement;
+  const captureBtn = document.getElementById("camera-capture")!;
+  const cancelBtn = document.getElementById("camera-cancel")!;
+
+  let stream: MediaStream | null = null;
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
+    });
+  } catch {
+    alert("Camera access denied or unavailable.");
+    return;
+  }
+
+  video.srcObject = stream;
+  modal.style.display = "flex";
+
+  const cleanup = () => {
+    modal.style.display = "none";
+    stream?.getTracks().forEach(t => t.stop());
+    video.srcObject = null;
+  };
+
+  await new Promise<void>((resolve) => {
+    const onCapture = async () => {
+      // Read dimensions BEFORE stopping the stream
+      const imgW = video.videoWidth;
+      const imgH = video.videoHeight;
+      if (imgW === 0 || imgH === 0) { cleanup(); resolve(); return; }
+
+      // Capture frame to canvas
+      const canvas = document.createElement("canvas");
+      canvas.width = imgW;
+      canvas.height = imgH;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(video, 0, 0);
+      cleanup();
+
+      // Convert to JPEG (smaller than PNG for photos)
+      const blob = await new Promise<Blob | null>(r => canvas.toBlob(r, "image/jpeg", 0.92));
+      if (!blob) { resolve(); return; }
+      const buffer = await blob.arrayBuffer();
+
+      // Compute page size matching camera aspect ratio
+      // Use 792pt (11in) as the long edge
+      const aspect = imgW / imgH;
+      let pageW: number, pageH: number;
+      if (aspect >= 1) {
+        pageW = 792;
+        pageH = Math.round(792 / aspect);
+      } else {
+        pageH = 792;
+        pageW = Math.round(792 * aspect);
+      }
+
+      // Create a new document if none open
+      const wasOpen = app.hasOpenDocument;
+      if (!wasOpen) {
+        const response = await rpc().send({ type: "createBlankDocument", width: pageW, height: pageH } as any);
+        if (response.type === "opened") {
+          app.hasOpenDocument = true;
+          viewport().handleOpenResponse(response);
+          undoManager().clear();
+          app.currentFilename = "scan.pdf";
+          document.title = "Scan — PDF Canvas";
+          showWelcome(false);
+        }
+      }
+
+      // Add the captured image sized to fit the page
+      const page = viewport().getCurrentPage();
+      const pageInfo = viewport().getPages()[page];
+      const pw = pageInfo?.width || pageW;
+      const ph = pageInfo?.height || pageH;
+
+      let rect: [number, number, number, number];
+      if (!wasOpen) {
+        // New document: image fills the page (page was sized to match camera)
+        rect = [0, 0, pw, ph];
+      } else {
+        // Existing document: fit image within 1/4 of page dimensions, preserve aspect ratio
+        const maxW = pw / 4;
+        const maxH = ph / 4;
+        const imgAspect = imgW / imgH;
+        let w = maxW, h = maxW / imgAspect;
+        if (h > maxH) { h = maxH; w = maxH * imgAspect; }
+        // Center on page
+        const cx = pw / 2, cy = ph / 2;
+        rect = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
+      }
+
+      await rpc().send(
+        { type: "addImage", page, rect, imageData: buffer, mimeType: "image/jpeg" },
+        [buffer]
+      );
+
+      markDirty();
+      viewport().fitToWidth();
+      updatePageDisplay();
+      await viewport().rerenderPage(page);
+
+      resolve();
+    };
+
+    const onCancel = () => { cleanup(); resolve(); };
+
+    captureBtn.addEventListener("click", onCapture, { once: true });
+    cancelBtn.addEventListener("click", onCancel, { once: true });
+  });
 }
 
 export async function saveFile(): Promise<void> {

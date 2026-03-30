@@ -58,6 +58,21 @@ function init() {
       }
     }
   };
+  properties.onOpenRecent = async (filename) => {
+    const { openRecentFile } = await import("./app/session-db");
+    const buffer = await openRecentFile(filename);
+    if (buffer) {
+      app.currentFilename = filename;
+      showWelcome(false);
+      await viewport.openDocument(buffer);
+      app.hasOpenDocument = true;
+      undoManager.clear();
+      viewport.fitToWidth();
+      updatePageDisplay();
+      updateToolbarState();
+      document.title = `${filename} — PDF Canvas`;
+    }
+  };
   app.properties = properties;
 
   // Wire selection → properties panel

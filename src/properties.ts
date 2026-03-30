@@ -2,7 +2,7 @@
 
 import type { AnnotationDTO, WidgetDTO } from "./types";
 import type { UndoManager, UndoEntry } from "./undo";
-import { getSessionInfo, clearSession } from "./app/session-db";
+import { getSessionInfo, clearSession, getRecentFiles, removeRecentFile, clearRecentFiles } from "./app/session-db";
 
 export type PropertyChangeEvent = {
   annotId: string;
@@ -27,6 +27,8 @@ export class PropertiesPanel {
   private tabBar: HTMLElement | null = null;
   /** Callback for jumping to a specific undo/redo position */
   onHistoryJump: ((direction: "undo" | "redo", steps: number) => Promise<void>) | null = null;
+  /** Callback for opening a recent file */
+  onOpenRecent: ((filename: string) => Promise<void>) | null = null;
 
   onToolDefaultChange(listener: (prop: string, value: any) => void): void {
     this.toolChangeListeners.push(listener);
@@ -381,10 +383,32 @@ export class PropertiesPanel {
       html += `</div>`;
     }
 
-    // Clear session button
-    if (session) {
-      html += `<div class="history-actions"><button class="props-btn" data-action="clearSession">Clear Saved Session</button></div>`;
+    // Recent files
+    const recentFiles = await getRecentFiles();
+    if (recentFiles.length > 0) {
+      html += `<div class="history-section-header">Recent Files</div>`;
+      html += `<div class="history-list">`;
+      for (const rf of recentFiles) {
+        const ago = formatTimeAgo(rf.lastOpened);
+        const sizeKB = Math.round(rf.size / 1024);
+        html += `<div class="history-entry recent-file" data-action="openRecent" data-filename="${escapeHtml(rf.filename)}" title="Click to open">`;
+        html += `<span class="recent-name">${escapeHtml(rf.filename)}</span>`;
+        html += `<span class="recent-meta">${sizeKB}KB &middot; ${ago}</span>`;
+        html += `<button class="recent-remove" data-action="removeRecent" data-filename="${escapeHtml(rf.filename)}" title="Remove">&times;</button>`;
+        html += `</div>`;
+      }
+      html += `</div>`;
     }
+
+    // Actions
+    html += `<div class="history-actions">`;
+    if (session) {
+      html += `<button class="props-btn" data-action="clearSession">Clear Saved Session</button>`;
+    }
+    if (recentFiles.length > 0) {
+      html += `<button class="props-btn" data-action="clearRecent" style="margin-top:4px">Clear Recent Files</button>`;
+    }
+    html += `</div>`;
 
     html += `</div>`;
     this.container.innerHTML = html;
@@ -395,9 +419,38 @@ export class PropertiesPanel {
       this.renderHistory();
     });
 
+    // Bind clear recent files
+    this.container.querySelector('[data-action="clearRecent"]')?.addEventListener("click", async () => {
+      await clearRecentFiles();
+      this.renderHistory();
+    });
+
+    // Bind open recent file
+    for (const el of this.container.querySelectorAll<HTMLElement>('[data-action="openRecent"]')) {
+      el.addEventListener("click", async (e) => {
+        // Don't trigger if clicking the remove button
+        if ((e.target as HTMLElement).dataset.action === "removeRecent") return;
+        const filename = el.dataset.filename;
+        if (filename && this.onOpenRecent) {
+          await this.onOpenRecent(filename);
+        }
+      });
+    }
+
+    // Bind remove individual recent file
+    for (const el of this.container.querySelectorAll<HTMLElement>('[data-action="removeRecent"]')) {
+      el.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const filename = el.dataset.filename;
+        if (filename) {
+          await removeRecentFile(filename);
+          this.renderHistory();
+        }
+      });
+    }
+
     // Bind history entry clicks (undo/redo to specific point)
     for (const el of this.container.querySelectorAll<HTMLElement>("[data-action=undo], [data-action=redo]")) {
-      el.style.cursor = "pointer";
       el.addEventListener("click", async () => {
         const direction = el.dataset.action as "undo" | "redo";
         const steps = parseInt(el.dataset.steps || "1");

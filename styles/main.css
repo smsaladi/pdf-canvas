@@ -695,6 +695,11 @@ body {
 .history-entry.current { border-left-color: var(--accent); }
 .history-entry.undone { opacity: 0.4; font-style: italic; }
 .history-entry[data-action]:hover { background: var(--bg-hover, rgba(0,0,0,0.05)); cursor: pointer; }
+.recent-file { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.recent-name { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-meta { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+.recent-remove { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 14px; padding: 0 4px; line-height: 1; }
+.recent-remove:hover { color: var(--text-primary); }
 .history-actions { padding: 12px 14px; }
 
 .props-body {
