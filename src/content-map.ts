@@ -8,6 +8,52 @@
 
 import * as mupdf from "mupdf";
 
+import { readLiteralString, findMatchingBracket } from "./content-stream/parser";
+
+/** Decode one escaped character from a literal string at position i (after the backslash) */
+function decodeLiteralChar(inner: string, i: number): number {
+  if (inner[i] !== "\\") return inner.charCodeAt(i);
+  const next = inner[i + 1];
+  switch (next) {
+    case "n": return 10;
+    case "r": return 13;
+    case "t": return 9;
+    case "b": return 8;
+    case "f": return 12;
+    case "(": return 40;
+    case ")": return 41;
+    case "\\": return 92;
+    default:
+      // Octal escape
+      if (next >= "0" && next <= "7") {
+        let octal = next;
+        if (i + 2 < inner.length && inner[i + 2] >= "0" && inner[i + 2] <= "7") {
+          octal += inner[i + 2];
+          if (i + 3 < inner.length && inner[i + 3] >= "0" && inner[i + 3] <= "7") {
+            octal += inner[i + 3];
+          }
+        }
+        return parseInt(octal, 8);
+      }
+      return next?.charCodeAt(0) ?? 0;
+  }
+}
+
+/** Get the length in bytes of an escape sequence starting at i (including the backslash) */
+function escapeLength(inner: string, i: number): number {
+  if (inner[i] !== "\\") return 1;
+  const next = inner[i + 1];
+  if (next >= "0" && next <= "7") {
+    let len = 2;
+    if (i + 2 < inner.length && inner[i + 2] >= "0" && inner[i + 2] <= "7") {
+      len++;
+      if (i + 3 < inner.length && inner[i + 3] >= "0" && inner[i + 3] <= "7") len++;
+    }
+    return len;
+  }
+  return 2; // \n, \r, \t, \\, \(, \) etc.
+}
+
 export interface GlyphMapping {
   char: string;
   unicode: number;
@@ -111,61 +157,135 @@ export function buildGlyphMap(page: mupdf.PDFPage): GlyphMapping[] {
     }
 
     // Find literal string Tj operators: (text) Tj (WinAnsi fonts)
-    const litPattern = /\(([^)]*)\)\s*Tj/g;
-    let lm;
-    while ((lm = litPattern.exec(data)) !== null) {
-      const text = lm[1];
-      const stringStart = lm.index + 1; // after (
-      for (let ci = 0; ci < text.length; ci++) {
-        streamGlyphs.push({
-          glyphId: text.charCodeAt(ci),
-          streamIndex,
-          hexStart: stringStart + ci,
-          hexEnd: stringStart + ci + 1,
-          isHex: false,
-        });
+    // Uses proper balanced-paren parsing to handle escaped/nested parens
+    {
+      let pos = 0;
+      while (pos < data.length) {
+        if (data[pos] === "(" ) {
+          const raw = readLiteralString(data, pos);
+          if (raw !== null) {
+            const strEnd = pos + raw.length;
+            // Check if followed by Tj operator
+            const afterStr = data.slice(strEnd);
+            const tjMatch = afterStr.match(/^\s*Tj\b/);
+            if (tjMatch) {
+              // Decode the literal string content (skip opening/closing parens)
+              const inner = raw.slice(1, -1);
+              let ci = 0;
+              let bytePos = pos + 1; // after (
+              while (ci < inner.length) {
+                if (inner[ci] === "\\") {
+                  // Escaped char — the actual character is at bytePos
+                  streamGlyphs.push({
+                    glyphId: decodeLiteralChar(inner, ci),
+                    streamIndex,
+                    hexStart: bytePos,
+                    hexEnd: bytePos + escapeLength(inner, ci),
+                    isHex: false,
+                  });
+                  const elen = escapeLength(inner, ci);
+                  bytePos += elen;
+                  ci += elen;
+                } else {
+                  streamGlyphs.push({
+                    glyphId: inner.charCodeAt(ci),
+                    streamIndex,
+                    hexStart: bytePos,
+                    hexEnd: bytePos + 1,
+                    isHex: false,
+                  });
+                  bytePos++;
+                  ci++;
+                }
+              }
+            }
+            pos = strEnd;
+            continue;
+          }
+        }
+        pos++;
       }
     }
 
     // Find TJ array operators: [(text) kern (text)] TJ or [<hex> kern <hex>] TJ
-    const tjArrayPattern = /\[((?:[^[\]]*?))\]\s*TJ/g;
-    let tam;
-    while ((tam = tjArrayPattern.exec(data)) !== null) {
-      const arrayContent = tam[1];
-      const arrayStart = tam.index + 1;
+    // Uses proper bracket matching to handle strings containing ] inside parens
+    {
+      let pos = 0;
+      while (pos < data.length) {
+        if (data[pos] === "[") {
+          const bracketEnd = findMatchingBracket(data, pos);
+          if (bracketEnd !== -1) {
+            const arrayEnd = bracketEnd + 1;
+            // Check if followed by TJ
+            const afterArr = data.slice(arrayEnd);
+            const tjMatch = afterArr.match(/^\s*TJ\b/);
+            if (tjMatch) {
+              const arrayContent = data.slice(pos + 1, bracketEnd);
+              const arrayStart = pos + 1;
 
-      // Extract literal strings from within the array
-      const innerLitPattern = /\(([^)]*)\)/g;
-      let ilm;
-      while ((ilm = innerLitPattern.exec(arrayContent)) !== null) {
-        const innerText = ilm[1];
-        const innerStart = arrayStart + ilm.index + 1;
-        for (let ci = 0; ci < innerText.length; ci++) {
-          streamGlyphs.push({
-            glyphId: innerText.charCodeAt(ci),
-            streamIndex,
-            hexStart: innerStart + ci,
-            hexEnd: innerStart + ci + 1,
-            isHex: false,
-          });
+              // Extract literal strings from within the array
+              let innerPos = 0;
+              while (innerPos < arrayContent.length) {
+                if (arrayContent[innerPos] === "(") {
+                  const raw = readLiteralString(arrayContent, innerPos);
+                  if (raw) {
+                    const inner = raw.slice(1, -1);
+                    let ci = 0;
+                    let bytePos = arrayStart + innerPos + 1;
+                    while (ci < inner.length) {
+                      if (inner[ci] === "\\") {
+                        streamGlyphs.push({
+                          glyphId: decodeLiteralChar(inner, ci),
+                          streamIndex,
+                          hexStart: bytePos,
+                          hexEnd: bytePos + escapeLength(inner, ci),
+                          isHex: false,
+                        });
+                        const elen = escapeLength(inner, ci);
+                        bytePos += elen;
+                        ci += elen;
+                      } else {
+                        streamGlyphs.push({
+                          glyphId: inner.charCodeAt(ci),
+                          streamIndex,
+                          hexStart: bytePos,
+                          hexEnd: bytePos + 1,
+                          isHex: false,
+                        });
+                        bytePos++;
+                        ci++;
+                      }
+                    }
+                    innerPos += raw.length;
+                    continue;
+                  }
+                }
+                if (arrayContent[innerPos] === "<" && innerPos + 1 < arrayContent.length && arrayContent[innerPos + 1] !== "<") {
+                  const closeIdx = arrayContent.indexOf(">", innerPos + 1);
+                  if (closeIdx !== -1) {
+                    const hexStr = arrayContent.slice(innerPos + 1, closeIdx);
+                    const baseOffset = arrayStart + innerPos + 1;
+                    for (let ci = 0; ci + 3 < hexStr.length; ci += 4) {
+                      streamGlyphs.push({
+                        glyphId: parseInt(hexStr.slice(ci, ci + 4), 16),
+                        streamIndex,
+                        hexStart: baseOffset + ci,
+                        hexEnd: baseOffset + ci + 4,
+                        isHex: true,
+                      });
+                    }
+                    innerPos = closeIdx + 1;
+                    continue;
+                  }
+                }
+                innerPos++;
+              }
+            }
+            pos = arrayEnd;
+            continue;
+          }
         }
-      }
-
-      // Extract hex strings from within the array (Type0/CID fonts in TJ arrays)
-      const innerHexPattern = /<([0-9A-Fa-f]+)>/g;
-      let ihm;
-      while ((ihm = innerHexPattern.exec(arrayContent)) !== null) {
-        const hexStr = ihm[1];
-        const baseOffset = arrayStart + ihm.index + 1;
-        for (let ci = 0; ci + 3 < hexStr.length; ci += 4) {
-          streamGlyphs.push({
-            glyphId: parseInt(hexStr.slice(ci, ci + 4), 16),
-            streamIndex,
-            hexStart: baseOffset + ci,
-            hexEnd: baseOffset + ci + 4,
-            isHex: true,
-          });
-        }
+        pos++;
       }
     }
   }
