@@ -503,6 +503,21 @@ export function handleReorderImage(request: any, respond: Respond, rpcId: number
   }
 
   writeContentStreams(contentsRef, streams);
-  console.log(`[ImageOp] Reordered image #${request.imageIndex} → ${request.direction}`);
-  respond(rpcId, { type: "imageUpdated", page: request.page } as any);
+
+  // Determine the new image index by re-scanning for the resource name
+  const newStreams = readContentStreams(contentsRef);
+  let newIndex = 0;
+  let found = -1;
+  for (const ns of newStreams) {
+    const dp = /\/([\w.+]+)\s+Do\b/g;
+    let dm;
+    while ((dm = dp.exec(ns)) !== null) {
+      if (imageNames.size > 0 && !imageNames.has(dm[1])) continue;
+      if (dm[1] === info.resourceName) { found = newIndex; }
+      newIndex++;
+    }
+  }
+
+  console.log(`[ImageOp] Reordered image #${request.imageIndex} → ${request.direction} (new index: ${found})`);
+  respond(rpcId, { type: "imageReordered", page: request.page, newImageIndex: found, resourceName: info.resourceName } as any);
 }

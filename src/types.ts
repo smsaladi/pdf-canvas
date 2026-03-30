@@ -149,5 +149,6 @@ export type WorkerResponse =
   | { type: "pagesUpdated"; pages: PageInfo[] }
   | { type: "imageExported"; bitmap: ImageBitmap; width: number; height: number }
   | { type: "imageUpdated"; page: number }
+  | { type: "imageReordered"; page: number; newImageIndex: number; resourceName: string }
   | { type: "imageDeleted"; page: number }
   | { type: "error"; message: string; requestType?: string };
