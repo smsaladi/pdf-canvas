@@ -6,6 +6,8 @@ import { saveSession, clearSession, addRecentFile } from "./session-db";
 export async function openFile(file: File): Promise<void> {
   app.currentFilename = file.name;
   const buffer = await file.arrayBuffer();
+  // Clone BEFORE opening — openDocument may transfer/detach the buffer
+  const bufCopy = buffer.slice(0);
   showWelcome(false);
   try {
     await viewport().openDocument(buffer);
@@ -15,8 +17,6 @@ export async function openFile(file: File): Promise<void> {
     updatePageDisplay();
     document.title = `${file.name} — PDF Canvas`;
     // Persist to IndexedDB for session restore on Ctrl+R
-    // Clone buffer since the original may be transferred/detached
-    const bufCopy = buffer.slice(0);
     saveSession(bufCopy, file.name, 0, viewport().getZoom()).catch(() => {});
     addRecentFile(file.name, bufCopy).catch(() => {});
   } catch (err: any) {
