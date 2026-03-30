@@ -137,6 +137,13 @@ function init() {
     const lineContext = (selection as any)._lineContext || "";
     const selectionY = (selection as any)._selectionY;
     console.log(`[TextEdit] Replacing "${oldText}" → "${newText}" on page ${page} (font: ${selFontName || "unknown"}, y=${selectionY?.toFixed(1)}, line: "${lineContext.substring(0, 40)}")`);
+    // Snapshot the document before editing for undo
+    let snapshotBuffer: ArrayBuffer | null = null;
+    try {
+      const snap = await rpc.send({ type: "save", options: "incremental" });
+      if (snap.type === "saved") snapshotBuffer = snap.buffer;
+    } catch {}
+
     const response = await rpc.send({
       type: "replaceTextSmart", page, oldText, newText,
       boldOverride: styleOverride?.bold, italicOverride: styleOverride?.italic,
@@ -146,6 +153,15 @@ function init() {
     if (response.type === "textReplacedSmart") {
       if (response.count > 0) {
         console.log(`[TextEdit] ✓ Success via ${response.method}`);
+        // Push undo entry with document snapshot
+        if (snapshotBuffer) {
+          undoManager.push({
+            annotId: `text-${page}`,
+            property: "textEdit",
+            previousValue: snapshotBuffer,
+            newValue: { page, oldText, newText },
+          });
+        }
         markDirty();
         viewport.clearTextCache(page);
         await viewport.rerenderPage(page);

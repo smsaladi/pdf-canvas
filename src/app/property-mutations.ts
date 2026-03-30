@@ -113,6 +113,15 @@ export async function applyUndo(entry: { annotId: string; property: string; prev
       }
       break;
     }
+    case "textEdit": {
+      // Undo: restore document from snapshot buffer
+      if (value instanceof ArrayBuffer) {
+        await viewport().openDocument(value);
+        // openDocument re-initializes everything, so return without rerenderPage
+        return;
+      }
+      break;
+    }
     case "reorderImage": {
       if (isImage) {
         const imageIndex = parseInt(entry.annotId.split("-")[1]);
