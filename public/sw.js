@@ -50,7 +50,9 @@ self.addEventListener("fetch", (event) => {
   } else {
     // Network-first for everything else
     event.respondWith(
-      fetch(event.request).catch(() => caches.match(event.request))
+      fetch(event.request).catch(() =>
+        caches.match(event.request).then((cached) => cached || new Response("Offline", { status: 503 }))
+      )
     );
   }
 });

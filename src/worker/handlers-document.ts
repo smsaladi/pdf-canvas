@@ -64,9 +64,11 @@ export function handleInsertBlankPage(request: any, respond: Respond, rpcId: num
   respond(rpcId, { type: "pagesUpdated", pages: getAllPageInfos() });
 }
 
-export function handleCreateBlankDocument(respond: Respond, rpcId: number | undefined) {
+export function handleCreateBlankDocument(request: any, respond: Respond, rpcId: number | undefined) {
+  const w = request.width || 612;
+  const h = request.height || 792;
   const doc = new mupdf.PDFDocument();
-  const pageObj = doc.addPage([0, 0, 612, 792], 0, null as any, "");
+  const pageObj = doc.addPage([0, 0, w, h], 0, null as any, "");
   doc.insertPage(0, pageObj);
   setDoc(doc);
   respond(rpcId, { type: "opened", pageCount: 1, pages: [getPageInfo(0)] });

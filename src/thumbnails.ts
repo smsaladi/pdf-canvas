@@ -122,6 +122,17 @@ export class ThumbnailSidebar {
     this.items.clear();
     this.rendered.clear();
 
+    // Close button
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "thumb-close-btn";
+    closeBtn.innerHTML = "&times;";
+    closeBtn.title = "Hide Thumbnails";
+    closeBtn.addEventListener("click", () => {
+      this.container.classList.add("hidden");
+      document.getElementById("btn-toggle-thumbs")?.classList.add("visible");
+    });
+    this.list.appendChild(closeBtn);
+
     // Compute thumbnail width from container
     this.thumbWidth = Math.max(40, this.container.offsetWidth - 24);
 
